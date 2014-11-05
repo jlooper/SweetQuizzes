@@ -1,0 +1,42 @@
+<fa-app class="full-screen">
+
+
+  <fa-header-footer-layout fa-options="{headerSize: 75, footerSize: 75}">
+
+    <!-- header -->
+    <fa-surface fa-background-color="'#BDA193'"><p class="title">Sweet Quizzes</p></fa-surface>
+  
+    <!-- content -->
+    <fa-surface fa-background-color="'#9ECEBE'"></fa-surface>
+  
+    <!-- footer -->
+    <fa-surface fa-pipe-from="MainCtrl" fa-background-color="'#BDA193'">
+
+      <!--<div class="container">
+
+        <div class="column"><img id="happy" class="centered" src="images/happy.svg" alt="ok"></div>
+    
+        <div class="column"><img id="sad" class="centered" src="images/sad.svg" alt="ok"></div>
+        
+      </div>-->
+      <fa-app>
+      <fa-grid-layout>
+        <fa-image-surface fa-click="changeQA($event)"
+               fa-image-url="images/happy.svg"
+               class="centered"
+               fa-size="[50,50]">
+        </fa-image-surface>
+      
+          <fa-image-surface fa-click="storeQA($event)"
+               fa-image-url="images/sad.svg"
+               class="centered"
+               fa-size="[50,50]">
+        </fa-image-surface>
+      </fa-grid-layout>
+      <fa-app>
+    
+    </fa-surface>
+
+  </fa-header-footer-layout>
+
+</fa-app>

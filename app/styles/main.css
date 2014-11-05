@@ -1,0 +1,35 @@
+body {
+    margin: 0;
+    font-family: 'Lato', sans-serif;
+    font-size:1.5em;
+}
+
+.full-screen {
+    position: fixed;
+    bottom: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    background-color: #D6789B;
+}
+.title{
+    text-align:center;
+    font-family: 'Pacifico', cursive;
+    color:#DAF4F1;
+    font-size:1.5em;
+    line-height:.3em;
+    text-shadow: 1px 1px 0px rgba(150, 150, 150, 1);
+}
+.centered{
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    padding:5px;
+}
+.container {
+  display: table;
+  width: 100%;
+}
+.column {
+  display: table-cell;
+}
