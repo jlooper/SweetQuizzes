@@ -1,0 +1,31 @@
+<fa-app class="full-screen" ng-controller='MainCtrl' id="app">
+
+
+  <fa-header-footer-layout fa-options="{headerSize: 75, footerSize: 75}">
+
+    <!-- header -->
+    <fa-surface><p class="title">Sweet Quizzes</p></fa-surface>
+  
+    <!-- content -->
+    <fa-surface fa-background-color="'#9ECEBE'"></fa-surface>
+  
+    <!-- footer -->
+   <fa-grid-layout fa-options="gridLayoutOptions" fa-background-color="'#BDA193'">
+	
+		<fa-image-surface
+             fa-image-url="img/happy.svg"
+             class="centered"
+             fa-size="[50,50]">
+        </fa-image-surface>
+        <fa-image-surface
+             fa-image-url="img/sad.svg"
+             class="centered"
+             fa-size="[50,50]">
+        </fa-image-surface>
+			
+	</fa-grid-layout>
+      
+
+  </fa-header-footer-layout>
+
+</fa-app>
