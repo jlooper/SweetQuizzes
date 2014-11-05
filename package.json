@@ -1,5 +1,5 @@
 {
-  "name": "famousAngularStarter",
+  "name": "sweetQuizzes",
   "version": "0.0.1",
   "dependencies": {
     "gulp-haml": "0.0.8",
