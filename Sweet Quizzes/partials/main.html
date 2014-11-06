@@ -1,4 +1,4 @@
-<fa-app class="full-screen" ng-controller='MainCtrl' id="app">
+<fa-app class="full-screen" id="app">
 
 
   <fa-header-footer-layout fa-options="{headerSize: 75, footerSize: 75}">
@@ -10,19 +10,18 @@
     <fa-surface fa-background-color="'#9ECEBE'"></fa-surface>
   
     <!-- footer -->
-   <fa-grid-layout fa-options="gridLayoutOptions" fa-background-color="'#BDA193'">
-	
-		<fa-image-surface
-             fa-image-url="img/happy.svg"
-             class="centered"
-             fa-size="[50,50]">
-        </fa-image-surface>
-        <fa-image-surface
-             fa-image-url="img/sad.svg"
-             class="centered"
-             fa-size="[50,50]">
-        </fa-image-surface>
-			
+   <fa-grid-layout fa-options="gridLayoutOptions">	
+        <fa-modifier>
+           <fa-surface fa-background-color="'#FBC5C5'">
+               <img class="centered" src="img/happy.svg" ng-click="getSelectedSet()"/>
+           </fa-surface>
+      </fa-modifier>
+       <fa-modifier>
+            <fa-surface fa-background-color="'#DAF4F1'">
+                <img class="centered" src="img/sad.svg"/>
+           </fa-surface>
+      </fa-modifier>
+       
 	</fa-grid-layout>
       
 

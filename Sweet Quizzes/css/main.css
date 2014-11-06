@@ -21,9 +21,9 @@ body {
     text-shadow: 1px 1px 0px rgba(150, 150, 150, 1);
 }
 img.centered{
-    display: block;
-    margin-left: auto;
-    margin-right: auto;
+    display:block;
+    margin: 0 auto;
+    padding:5px;
 }
 .container {
   display: table;

@@ -8,13 +8,12 @@ angular.module('sweetQuizzes')
     var Flipper    = $famous['famous/views/Flipper'];
     var Modifier   = $famous['famous/core/Modifier'];
     
-
     var mainContext = Engine.createContext();
     mainContext.setPerspective(500);
       
     $scope.gridLayoutOptions = {
        dimensions: [2, 1]
-    };
+    };      
 
     $scope.flipper = new Flipper();
     
@@ -66,13 +65,14 @@ angular.module('sweetQuizzes')
     });
       
      
-    $scope.changeQA = function($event) {
+    /*$scope.changeQA = function($event) {
       console.log('change');
       console.log($event);
     };
     $scope.storeQA = function($event) {
       console.log( 'store');
       console.log($event);
-    };
+    };*/
+       
 
   });
