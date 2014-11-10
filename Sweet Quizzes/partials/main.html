@@ -7,17 +7,27 @@
     <fa-surface><p class="title">Sweet Quizzes</p></fa-surface>
   
     <!-- content -->
-    <fa-surface fa-background-color="'#9ECEBE'"></fa-surface>
+      <fa-surface fa-background-color="'#9ECEBE'">
+          <div class="getnew">
+            <form>
+                <input type="text" name="quizId" placeholder="Quiz Id" ng-model="quiz.quizId">
+                <button ng-click="getNewQuiz(quiz)">Get Quiz</button>
+             </form>           
+           </div>
+          <div align="center">
+          {{quizTitle}}
+          </div>
+      </fa-surface>
   
     <!-- footer -->
-   <fa-grid-layout fa-options="gridLayoutOptions">	
+   <fa-grid-layout fa-options="gridLayoutOptions">
         <fa-modifier>
            <fa-surface fa-background-color="'#FBC5C5'">
-               <img class="centered" src="img/happy.svg" ng-click="getSelectedSet()"/>
+               <img class="centered" src="img/happy.svg" ng-click="nextQuestion()"/>
            </fa-surface>
       </fa-modifier>
        <fa-modifier>
-            <fa-surface fa-background-color="'#DAF4F1'">
+            <fa-surface fa-background-color="'#DAF4F1'" ng-click="storeQuestion()">
                 <img class="centered" src="img/sad.svg"/>
            </fa-surface>
       </fa-modifier>
