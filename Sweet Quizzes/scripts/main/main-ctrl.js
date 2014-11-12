@@ -17,8 +17,10 @@ angular.module('sweetQuizzes')
 
         
         $scope.index = 0;
+        //sample quiz
         $scope.quizId = 2273151;
-
+        $scope.reviewQuizData=[];
+             
 
         var mainContext = Engine.createContext();
         mainContext.setPerspective(500);
@@ -28,18 +30,31 @@ angular.module('sweetQuizzes')
         };
         
         $scope.getNewQuiz = function (quiz) {
-           $scope.quizId = quiz.quizId;
-            if($scope.quizData){
-                $scope.clear()
+            if(angular.isDefined(quiz)){
+               $scope.quizId = quiz.quizId;
+                if($scope.quizData){
+                    $scope.clear()
+                }
+                $scope.loadQuiz()
+                }
+            else{
+                alert("Please enter a quiz id from Quizlet. Try 2154706")
             }
-            $scope.loadQuiz()
+        };
+        
+        $scope.getReviewQuiz = function (quiz) {
+           
+                    $scope.clear()
+                    $scope.quizData = $scope.reviewQuizData;
+            console.log($scope.quizData)
+                    $scope.buildInterface();
+                
         };
 
         $scope.loadQuiz = function () {            
             var promise = quizlet.getQuiz($scope.quizId);
             
             promise.success(function (data) {
-                $scope.loading = false;
                 $scope.quizTitle = data.title;
                 $scope.quizData = data.terms;
                 $scope.buildInterface();
@@ -51,80 +66,81 @@ angular.module('sweetQuizzes')
         };
 
         $scope.buildInterface = function() {
-            //$scope.index = $scope.index+1;
-            
-            if($scope.quizData.length>0){
-            
-            //console.log($scope.quizData);                
+            if(!angular.isDefined($scope.quizData)){
+                alert("Sorry, that quiz id seems to be invalid")
+            } 
+            else {
+                if($scope.quizData.length>0){
                 
-            $scope.flipper = new Flipper();
-            $scope.centerModifier = new Modifier({
-                  origin: [0.5, 0],
-                  align: [0.5, 0]
-                });
-        
-            
-            var frontSurface = new Surface({
-                    size: [300, 300],
-                    content: $scope.quizData[$scope.index].term,
-                    properties: {
-                        background: '#F09BA2',
-                        textAlign: 'center',
-                        border: '5px solid #BDA193',
-                        borderRadius: '10px',
-                        padding:'10px'
-                    }
-                });
-
-                var backSurface = new Surface({
-                    size: [300, 300],
-                    content: $scope.quizData[$scope.index].definition,
-                    properties: {
-                        background: '#FBC5C5',
-                        color: 'black',
-                        textAlign: 'center',
-                        border: '5px solid #BDA193',
-                        borderRadius: '10px',
-                        padding:'10px'
-                    }
-                });
-
-                $scope.flipper.setFront(frontSurface);
-                $scope.flipper.setBack(backSurface);
-            
-            var toggle = false;
-                frontSurface.on('click', function () {
-                    var angle = toggle ? 0 : Math.PI;
-                    $scope.flipper.setAngle(angle, {
-                        curve: 'easeOutBounce',
-                        duration: 500
+                $scope.flipper = new Flipper();
+                $scope.centerModifier = new Modifier({
+                      origin: [0.5, 0],
+                      align: [0.5, 0]
                     });
-                    toggle = !toggle;
-                });
-                backSurface.on('click', function () {
-                    var angle = toggle ? 0 : Math.PI;
-                    $scope.flipper.setAngle(angle, {
-                        curve: 'easeInOut',
-                        duration: 500
+            
+                
+                var frontSurface = new Surface({
+                        size: [300, 300],
+                        content: $scope.quizData[$scope.index].term,
+                        properties: {
+                            background: '#F09BA2',
+                            textAlign: 'center',
+                            border: '5px solid #BDA193',
+                            borderRadius: '10px',
+                            padding:'10px'
+                        }
                     });
-                    toggle = !toggle;
-                });
-            
-                var spring = {
-                   method: 'spring',
-                   period: 1000,
-                   dampingRatio: 0.3
-                };
-            
-            
-            
-                $scope.centerModifier.setTransform(
-                  Transform.translate(0,200,0),spring
-                );
-                mainContext.add($scope.centerModifier).add($scope.flipper);
-            }
-            else{
-                alert("all done!")
+    
+                    var backSurface = new Surface({
+                        size: [300, 300],
+                        content: $scope.quizData[$scope.index].definition,
+                        properties: {
+                            background: '#FBC5C5',
+                            color: 'black',
+                            textAlign: 'center',
+                            border: '5px solid #BDA193',
+                            borderRadius: '10px',
+                            padding:'10px'
+                        }
+                    });
+    
+                    $scope.flipper.setFront(frontSurface);
+                    $scope.flipper.setBack(backSurface);
+                
+                var toggle = false;
+                    frontSurface.on('click', function () {
+                        var angle = toggle ? 0 : Math.PI;
+                        $scope.flipper.setAngle(angle, {
+                            curve: 'easeOutBounce',
+                            duration: 500
+                        });
+                        toggle = !toggle;
+                    });
+                    backSurface.on('click', function () {
+                        var angle = toggle ? 0 : Math.PI;
+                        $scope.flipper.setAngle(angle, {
+                            curve: 'easeInOut',
+                            duration: 500
+                        });
+                        toggle = !toggle;
+                    });
+                
+                    var spring = {
+                       method: 'spring',
+                       period: 1000,
+                       dampingRatio: 0.3
+                    };
+                
+                
+                
+                    $scope.centerModifier.setTransform(
+                      Transform.translate(0,200,0),spring
+                    );
+                    mainContext.add($scope.centerModifier).add($scope.flipper);
+                }
+                else{
+                    alert("all done!")
+                }
             }
         };
         $scope.clear = function(){
@@ -148,6 +164,14 @@ angular.module('sweetQuizzes')
            
         };
         $scope.storeQuestion = function() {
+            //capture the data for future review
+            $scope.quizData.splice($scope.index, 1);            
+
+            
+            $scope.reviewData = $scope.quizData[$scope.index]
+            $scope.reviewQuizData.push($scope.reviewData);
+            
+                        
             $scope.centerModifier.setTransform(
               Transform.translate(300,800,0),
               { duration : 200, curve: 'easeInOut' }

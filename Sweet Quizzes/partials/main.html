@@ -4,17 +4,20 @@
   <fa-header-footer-layout fa-options="{headerSize: 75, footerSize: 75}">
 
     <!-- header -->
-    <fa-surface><p class="title">Sweet Quizzes</p></fa-surface>
+      <fa-surface><p class="title">Sweet Quizzes</p></fa-surface>
   
     <!-- content -->
       <fa-surface fa-background-color="'#9ECEBE'">
           <div class="getnew">
-            <form>
-                <input type="text" name="quizId" placeholder="Quiz Id" ng-model="quiz.quizId">
-                <button ng-click="getNewQuiz(quiz)">Get Quiz</button>
-             </form>           
+              <form>
+                 <input type="text" name="quizId" placeholder="Quiz Id" ng-model="quiz.quizId">
+                <button class="blue" ng-click="getNewQuiz(quiz)">Get Quiz</button>
+                <button class="pink" ng-click="getReviewQuiz()"><img src="img/star.svg" class="star-icon"/>Review</button>              
+              </form>
+                
            </div>
-          <div align="center">
+          
+           <div align="center">
           {{quizTitle}}
           </div>
       </fa-surface>
@@ -28,7 +31,7 @@
       </fa-modifier>
        <fa-modifier>
             <fa-surface fa-background-color="'#DAF4F1'" ng-click="storeQuestion()">
-                <img class="centered" src="img/sad.svg"/>
+                <img class="centered" src="img/star.svg"/>
            </fa-surface>
       </fa-modifier>
        

@@ -30,20 +30,31 @@ img.centered{
   width: 100%;
 }
 .getnew {
-    padding: 10px;
+    padding: 12px;
     vertical-align: middle;
     line-height: 30px;
     height: 30px;
 }
 input{
     height:30px;
-    width:230px;
+    width:130px;
     font-size:15px;
 }
 button{
     width: 100px;
     height: 35px;
     font-size: 15px;
-    background-color: #FBC5C5;
     border: none;
+    border-radius:2px;
+}
+button.pink{
+   background-color: #FBC5C5;
+}
+button.blue{
+   background-color: #DAF4F1;
+}
+.star-icon{
+   width:10px;
+   height:10px;
+   padding-right:10px
 }
