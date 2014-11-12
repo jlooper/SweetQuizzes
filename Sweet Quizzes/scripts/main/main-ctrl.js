@@ -80,7 +80,7 @@ angular.module('sweetQuizzes')
             
                 
                 var frontSurface = new Surface({
-                        size: [300, 300],
+                        size: [200, 200],
                         content: $scope.quizData[$scope.index].term,
                         properties: {
                             background: '#F09BA2',
@@ -92,7 +92,7 @@ angular.module('sweetQuizzes')
                     });
     
                     var backSurface = new Surface({
-                        size: [300, 300],
+                        size: [200, 200],
                         content: $scope.quizData[$scope.index].definition,
                         properties: {
                             background: '#FBC5C5',

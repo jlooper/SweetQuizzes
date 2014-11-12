@@ -1,4 +1,4 @@
-!function(e){if("object"==typeof exports&&"undefined"!=typeof module)module.exports=e();else if("function"==typeof define&&define.amd)define([],e);else{var f;"undefined"!=typeof window?f=window:"undefined"!=typeof global?f=global:"undefined"!=typeof self&&(f=self),f.famous=e()}}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(_dereq_,module,exports){
+!function(e){if("object"==typeof exports&&"undefined"!=typeof module)module.exports=e();else if("function"==typeof define&&define.amd)define([],e);else{var f;"undefined"!=typeof window?f=window:"undefined"!=typeof global?f=global:"undefined"!=typeof self&&(f=self),f.famous=e()}}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -14,11 +14,18 @@ var ElementAllocator = _dereq_('./ElementAllocator');
 var Transform = _dereq_('./Transform');
 var Transitionable = _dereq_('../transitions/Transitionable');
 
-var _originZeroZero = [0, 0];
+var _zeroZero = [0, 0];
+var usePrefix = !('perspective' in document.documentElement.style);
 
 function _getElementSize(element) {
     return [element.clientWidth, element.clientHeight];
 }
+
+var _setPerspective = usePrefix ? function(element, perspective) {
+    element.style.webkitPerspective = perspective ? perspective.toFixed() + 'px' : '';
+} : function(element, perspective) {
+    element.style.perspective = perspective ? perspective.toFixed() + 'px' : '';
+};
 
 /**
  * The top-level container for a Famous-renderable piece of the document.
@@ -45,8 +52,8 @@ function Context(container) {
         allocator: this._allocator,
         transform: Transform.identity,
         opacity: 1,
-        origin: _originZeroZero,
-        align: null,
+        origin: _zeroZero,
+        align: _zeroZero,
         size: this._size
     };
 
@@ -127,8 +134,7 @@ Context.prototype.update = function update(contextParameters) {
     }
     var perspective = this._perspectiveState.get();
     if (perspective !== this._perspective) {
-        this.container.style.perspective = perspective ? perspective.toFixed() + 'px' : '';
-        this.container.style.webkitPerspective = perspective ? perspective.toFixed() : '';
+        _setPerspective(this.container, perspective);
         this._perspective = perspective;
     }
 
@@ -224,7 +230,7 @@ Context.prototype.unpipe = function unpipe(target) {
 };
 
 module.exports = Context;
-},{"../transitions/Transitionable":87,"./ElementAllocator":2,"./EventHandler":6,"./RenderNode":10,"./Transform":14}],2:[function(_dereq_,module,exports){
+},{"../transitions/Transitionable":88,"./ElementAllocator":2,"./EventHandler":7,"./RenderNode":11,"./Transform":15}],2:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -341,6 +347,333 @@ module.exports = ElementAllocator;
  * @copyright Famous Industries, Inc. 2014
  */
 
+var Entity = _dereq_('./Entity');
+var EventHandler = _dereq_('./EventHandler');
+var Transform = _dereq_('./Transform');
+
+var usePrefix = !('transform' in document.documentElement.style);
+var devicePixelRatio = window.devicePixelRatio || 1;
+
+/**
+ * A base class for viewable content and event
+ *   targets inside a Famo.us application, containing a renderable document
+ *   fragment. Like an HTML div, it can accept internal markup,
+ *   properties, classes, and handle events.
+ *
+ * @class ElementOutput
+ * @constructor
+ *
+ * @param {Node} element document parent of this container
+ */
+function ElementOutput(element) {
+    this._matrix = null;
+    this._opacity = 1;
+    this._origin = null;
+    this._size = null;
+
+    this._eventOutput = new EventHandler();
+    this._eventOutput.bindThis(this);
+
+    /** @ignore */
+    this.eventForwarder = function eventForwarder(event) {
+        this._eventOutput.emit(event.type, event);
+    }.bind(this);
+
+    this.id = Entity.register(this);
+    this._element = null;
+    this._sizeDirty = false;
+    this._originDirty = false;
+    this._transformDirty = false;
+
+    this._invisible = false;
+    if (element) this.attach(element);
+}
+
+/**
+ * Bind a callback function to an event type handled by this object.
+ *
+ * @method "on"
+ *
+ * @param {string} type event type key (for example, 'click')
+ * @param {function(string, Object)} fn handler callback
+ * @return {EventHandler} this
+ */
+ElementOutput.prototype.on = function on(type, fn) {
+    if (this._element) this._element.addEventListener(type, this.eventForwarder);
+    this._eventOutput.on(type, fn);
+};
+
+/**
+ * Unbind an event by type and handler.
+ *   This undoes the work of "on"
+ *
+ * @method removeListener
+ * @param {string} type event type key (for example, 'click')
+ * @param {function(string, Object)} fn handler
+ */
+ElementOutput.prototype.removeListener = function removeListener(type, fn) {
+    this._eventOutput.removeListener(type, fn);
+};
+
+/**
+ * Trigger an event, sending to all downstream handlers
+ *   listening for provided 'type' key.
+ *
+ * @method emit
+ *
+ * @param {string} type event type key (for example, 'click')
+ * @param {Object} [event] event data
+ * @return {EventHandler} this
+ */
+ElementOutput.prototype.emit = function emit(type, event) {
+    if (event && !event.origin) event.origin = this;
+    var handled = this._eventOutput.emit(type, event);
+    if (handled && event && event.stopPropagation) event.stopPropagation();
+    return handled;
+};
+
+/**
+ * Add event handler object to set of downstream handlers.
+ *
+ * @method pipe
+ *
+ * @param {EventHandler} target event handler target object
+ * @return {EventHandler} passed event handler
+ */
+ElementOutput.prototype.pipe = function pipe(target) {
+    return this._eventOutput.pipe(target);
+};
+
+/**
+ * Remove handler object from set of downstream handlers.
+ *   Undoes work of "pipe"
+ *
+ * @method unpipe
+ *
+ * @param {EventHandler} target target handler object
+ * @return {EventHandler} provided target
+ */
+ElementOutput.prototype.unpipe = function unpipe(target) {
+    return this._eventOutput.unpipe(target);
+};
+
+/**
+ * Return spec for this surface. Note that for a base surface, this is
+ *    simply an id.
+ *
+ * @method render
+ * @private
+ * @return {Object} render spec for this surface (spec id)
+ */
+ElementOutput.prototype.render = function render() {
+    return this.id;
+};
+
+//  Attach Famous event handling to document events emanating from target
+//    document element.  This occurs just after attachment to the document.
+//    Calling this enables methods like #on and #pipe.
+function _addEventListeners(target) {
+    for (var i in this._eventOutput.listeners) {
+        target.addEventListener(i, this.eventForwarder);
+    }
+}
+
+//  Detach Famous event handling from document events emanating from target
+//  document element.  This occurs just before detach from the document.
+function _removeEventListeners(target) {
+    for (var i in this._eventOutput.listeners) {
+        target.removeEventListener(i, this.eventForwarder);
+    }
+}
+
+/**
+ * Return a Matrix's webkit css representation to be used with the
+ *    CSS3 -webkit-transform style.
+ *    Example: -webkit-transform: matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,716,243,0,1)
+ *
+ * @method _formatCSSTransform
+ * @private
+ * @param {FamousMatrix} m matrix
+ * @return {string} matrix3d CSS style representation of the transform
+ */
+function _formatCSSTransform(m) {
+    m[12] = Math.round(m[12] * devicePixelRatio) / devicePixelRatio;
+    m[13] = Math.round(m[13] * devicePixelRatio) / devicePixelRatio;
+
+    var result = 'matrix3d(';
+    for (var i = 0; i < 15; i++) {
+        result += (m[i] < 0.000001 && m[i] > -0.000001) ? '0,' : m[i] + ',';
+    }
+    result += m[15] + ')';
+    return result;
+}
+
+/**
+ * Directly apply given FamousMatrix to the document element as the
+ *   appropriate webkit CSS style.
+ *
+ * @method setMatrix
+ *
+ * @static
+ * @private
+ * @param {Element} element document element
+ * @param {FamousMatrix} matrix
+ */
+
+var _setMatrix;
+if (navigator.userAgent.toLowerCase().indexOf('firefox') > -1) {
+    _setMatrix = function(element, matrix) {
+        element.style.zIndex = (matrix[14] * 1000000) | 0;    // fix for Firefox z-buffer issues
+        element.style.transform = _formatCSSTransform(matrix);
+    };
+}
+else if (usePrefix) {
+    _setMatrix = function(element, matrix) {
+        element.style.webkitTransform = _formatCSSTransform(matrix);
+    };
+}
+else {
+    _setMatrix = function(element, matrix) {
+        element.style.transform = _formatCSSTransform(matrix);
+    };
+}
+
+// format origin as CSS percentage string
+function _formatCSSOrigin(origin) {
+    return (100 * origin[0]) + '% ' + (100 * origin[1]) + '%';
+}
+
+// Directly apply given origin coordinates to the document element as the
+// appropriate webkit CSS style.
+var _setOrigin = usePrefix ? function(element, origin) {
+    element.style.webkitTransformOrigin = _formatCSSOrigin(origin);
+} : function(element, origin) {
+    element.style.transformOrigin = _formatCSSOrigin(origin);
+};
+
+// Shrink given document element until it is effectively invisible.
+var _setInvisible = usePrefix ? function(element) {
+    element.style.webkitTransform = 'scale3d(0.0001,0.0001,0.0001)';
+    element.style.opacity = 0;
+} : function(element) {
+    element.style.transform = 'scale3d(0.0001,0.0001,0.0001)';
+    element.style.opacity = 0;
+};
+
+function _xyNotEquals(a, b) {
+    return (a && b) ? (a[0] !== b[0] || a[1] !== b[1]) : a !== b;
+}
+
+/**
+ * Apply changes from this component to the corresponding document element.
+ * This includes changes to classes, styles, size, content, opacity, origin,
+ * and matrix transforms.
+ *
+ * @private
+ * @method commit
+ * @param {Context} context commit context
+ */
+ElementOutput.prototype.commit = function commit(context) {
+    var target = this._element;
+    if (!target) return;
+
+    var matrix = context.transform;
+    var opacity = context.opacity;
+    var origin = context.origin;
+    var size = context.size;
+
+    if (!matrix && this._matrix) {
+        this._matrix = null;
+        this._opacity = 0;
+        _setInvisible(target);
+        return;
+    }
+
+    if (_xyNotEquals(this._origin, origin)) this._originDirty = true;
+    if (Transform.notEquals(this._matrix, matrix)) this._transformDirty = true;
+
+    if (this._invisible) {
+        this._invisible = false;
+        this._element.style.display = '';
+    }
+
+    if (this._opacity !== opacity) {
+        this._opacity = opacity;
+        target.style.opacity = (opacity >= 1) ? '0.999999' : opacity;
+    }
+
+    if (this._transformDirty || this._originDirty || this._sizeDirty) {
+        if (this._sizeDirty) this._sizeDirty = false;
+
+        if (this._originDirty) {
+            if (origin) {
+                if (!this._origin) this._origin = [0, 0];
+                this._origin[0] = origin[0];
+                this._origin[1] = origin[1];
+            }
+            else this._origin = null;
+            _setOrigin(target, this._origin);
+            this._originDirty = false;
+        }
+
+        if (!matrix) matrix = Transform.identity;
+        this._matrix = matrix;
+        var aaMatrix = this._size ? Transform.thenMove(matrix, [-this._size[0]*origin[0], -this._size[1]*origin[1], 0]) : matrix;
+        _setMatrix(target, aaMatrix);
+        this._transformDirty = false;
+    }
+};
+
+ElementOutput.prototype.cleanup = function cleanup() {
+    if (this._element) {
+        this._invisible = true;
+        this._element.style.display = 'none';
+    }
+};
+
+/**
+ * Place the document element that this component manages into the document.
+ *
+ * @private
+ * @method attach
+ * @param {Node} target document parent of this container
+ */
+ElementOutput.prototype.attach = function attach(target) {
+    this._element = target;
+    _addEventListeners.call(this, target);
+};
+
+/**
+ * Remove any contained document content associated with this surface
+ *   from the actual document.
+ *
+ * @private
+ * @method detach
+ */
+ElementOutput.prototype.detach = function detach() {
+    var target = this._element;
+    if (target) {
+        _removeEventListeners.call(this, target);
+        if (this._invisible) {
+            this._invisible = false;
+            this._element.style.display = '';
+        }
+    }
+    this._element = null;
+    return target;
+};
+
+module.exports = ElementOutput;
+},{"./Entity":5,"./EventHandler":7,"./Transform":15}],4:[function(_dereq_,module,exports){
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: mark@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
 /**
  * The singleton object initiated upon process
  *   startup which manages all active Context instances, runs
@@ -377,7 +710,8 @@ var options = {
     containerType: 'div',
     containerClass: 'famous-container',
     fpsCap: undefined,
-    runLoop: true
+    runLoop: true,
+    appMode: true
 };
 var optionsManager = new OptionsManager(options);
 
@@ -448,10 +782,22 @@ function handleResize(event) {
 window.addEventListener('resize', handleResize, false);
 handleResize();
 
-// prevent scrolling via browser
-window.addEventListener('touchmove', function(event) {
-    event.preventDefault();
-}, true);
+/**
+ * Initialize famous for app mode
+ *
+ * @static
+ * @private
+ * @method initialize
+ */
+function initialize() {
+    // prevent scrolling via browser
+    window.addEventListener('touchmove', function(event) {
+        event.preventDefault();
+    }, true);
+    document.body.classList.add('famous-root');
+    document.documentElement.classList.add('famous-root');
+}
+var initialized = false;
 
 /**
  * Add event handler object to set of downstream handlers.
@@ -568,8 +914,8 @@ Engine.setFPSCap = function setFPSCap(fps) {
  * @param {string} key
  * @return {Object} engine options
  */
-Engine.getOptions = function getOptions() {
-    return optionsManager.getOptions.apply(optionsManager, arguments);
+Engine.getOptions = function getOptions(key) {
+    return optionsManager.getOptions(key);
 };
 
 /**
@@ -600,6 +946,8 @@ Engine.setOptions = function setOptions(options) {
  * @return {Context} new Context within el
  */
 Engine.createContext = function createContext(el) {
+    if (!initialized && options.appMode) Engine.nextTick(initialize);
+
     var needMountContainer = false;
     if (!el) {
         el = document.createElement(options.containerType);
@@ -629,6 +977,31 @@ Engine.createContext = function createContext(el) {
 Engine.registerContext = function registerContext(context) {
     contexts.push(context);
     return context;
+};
+
+/**
+ * Returns a list of all contexts.
+ *
+ * @static
+ * @method getContexts
+ * @return {Array} contexts that are updated on each tick
+ */
+Engine.getContexts = function getContexts() {
+    return contexts;
+};
+
+/**
+ * Removes a context from the run loop. Note: this does not do any
+ *     cleanup.
+ *
+ * @static
+ * @method deregisterContext
+ *
+ * @param {Context} context Context to deregister
+ */
+Engine.deregisterContext = function deregisterContext(context) {
+    var i = contexts.indexOf(context);
+    if (i >= 0) contexts.splice(i, 1);
 };
 
 /**
@@ -669,7 +1042,7 @@ optionsManager.on('change', function(data) {
 });
 
 module.exports = Engine;
-},{"./Context":1,"./EventHandler":6,"./OptionsManager":9}],4:[function(_dereq_,module,exports){
+},{"./Context":1,"./EventHandler":7,"./OptionsManager":10}],5:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -697,7 +1070,7 @@ var entities = [];
  *
  * @private
  * @method get
- * @param {Number} id entity reigstration id
+ * @param {Number} id entity registration id
  * @return {Surface} entity in the global index
  */
 function get(id) {
@@ -709,8 +1082,8 @@ function get(id) {
  *
  * @private
  * @method set
- * @param {Number} id entity reigstration id
- * @return {Surface} entity to add to the global index
+ * @param {Number} id entity registration id
+ * @param {Surface} entity to add to the global index
  */
 function set(id, entity) {
     entities[id] = entity;
@@ -735,7 +1108,7 @@ function register(entity) {
  *
  * @private
  * @method unregister
- * @param {Number} id entity reigstration id
+ * @param {Number} id entity registration id
  */
 function unregister(id) {
     set(id, null);
@@ -747,7 +1120,7 @@ module.exports = {
     get: get,
     set: set
 };
-},{}],5:[function(_dereq_,module,exports){
+},{}],6:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -823,8 +1196,11 @@ EventEmitter.prototype.addListener = EventEmitter.prototype.on;
  * @return {EventEmitter} this
  */
 EventEmitter.prototype.removeListener = function removeListener(type, handler) {
-    var index = this.listeners[type].indexOf(handler);
-    if (index >= 0) this.listeners[type].splice(index, 1);
+    var listener = this.listeners[type];
+    if (listener !== undefined) {
+        var index = listener.indexOf(handler);
+        if (index >= 0) listener.splice(index, 1);
+    }
     return this;
 };
 
@@ -840,7 +1216,7 @@ EventEmitter.prototype.bindThis = function bindThis(owner) {
 };
 
 module.exports = EventEmitter;
-},{}],6:[function(_dereq_,module,exports){
+},{}],7:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -1045,7 +1421,7 @@ EventHandler.prototype.unsubscribe = function unsubscribe(source) {
 };
 
 module.exports = EventHandler;
-},{"./EventEmitter":5}],7:[function(_dereq_,module,exports){
+},{"./EventEmitter":6}],8:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -1168,7 +1544,7 @@ Group.prototype.commit = function commit(context) {
 };
 
 module.exports = Group;
-},{"./Context":1,"./Surface":13,"./Transform":14}],8:[function(_dereq_,module,exports){
+},{"./Context":1,"./Surface":14,"./Transform":15}],9:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -1205,6 +1581,7 @@ function Modifier(options) {
     this._originGetter = null;
     this._alignGetter = null;
     this._sizeGetter = null;
+    this._proportionGetter = null;
 
     /* TODO: remove this when deprecation complete */
     this._legacyStates = {};
@@ -1215,6 +1592,7 @@ function Modifier(options) {
         origin: null,
         align: null,
         size: null,
+        proportions: null,
         target: null
     };
 
@@ -1224,6 +1602,7 @@ function Modifier(options) {
         if (options.origin) this.originFrom(options.origin);
         if (options.align) this.alignFrom(options.align);
         if (options.size) this.sizeFrom(options.size);
+        if (options.proportions) this.proportionsFrom(options.proportions);
     }
 }
 
@@ -1316,6 +1695,24 @@ Modifier.prototype.sizeFrom = function sizeFrom(size) {
     else {
         this._sizeGetter = null;
         this._output.size = size;
+    }
+    return this;
+};
+
+/**
+ * Set function, object, or numerical array to provide proportions, as [percent of width, percent of height].
+ *
+ * @method proportionsFrom
+ *
+ * @param {Object} proportions provider object
+ * @return {Modifier} this
+ */
+Modifier.prototype.proportionsFrom = function proportionsFrom(proportions) {
+    if (proportions instanceof Function) this._proportionGetter = proportions;
+    else if (proportions instanceof Object && proportions.get) this._proportionGetter = proportions.get.bind(proportions);
+    else {
+        this._proportionGetter = null;
+        this._output.proportions = proportions;
     }
     return this;
 };
@@ -1438,6 +1835,28 @@ Modifier.prototype.setSize = function setSize(size, transition, callback) {
 };
 
 /**
+ * Deprecated: Prefer proportionsFrom with static origin array, or use a Transitionable with those proportions.
+ * @deprecated
+ * @method setProportions
+ * @param {Array.Number} proportions two element array of [percent of width, percent of height]
+ * @param {Transitionable} transition Valid transitionable object
+ * @param {Function} callback callback to call after transition completes
+ * @return {Modifier} this
+ */
+Modifier.prototype.setProportions = function setProportions(proportions, transition, callback) {
+    if (proportions && (transition || this._legacyStates.proportions)) {
+        if (!this._legacyStates.proportions) {
+            this._legacyStates.proportions = new Transitionable(this._output.proportions || [0, 0]);
+        }
+        if (!this._proportionGetter) this.proportionsFrom(this._legacyStates.proportions);
+
+        this._legacyStates.proportions.set(proportions, transition, callback);
+        return this;
+    }
+    else return this.proportionsFrom(proportions);
+};
+
+/**
  * Deprecated: Prefer to stop transform in your provider object.
  * @deprecated
  * @method halt
@@ -1448,11 +1867,13 @@ Modifier.prototype.halt = function halt() {
     if (this._legacyStates.origin) this._legacyStates.origin.halt();
     if (this._legacyStates.align) this._legacyStates.align.halt();
     if (this._legacyStates.size) this._legacyStates.size.halt();
+    if (this._legacyStates.proportions) this._legacyStates.proportions.halt();
     this._transformGetter = null;
     this._opacityGetter = null;
     this._originGetter = null;
     this._alignGetter = null;
     this._sizeGetter = null;
+    this._proportionGetter = null;
 };
 
 /**
@@ -1515,6 +1936,16 @@ Modifier.prototype.getSize = function getSize() {
     return this._sizeGetter ? this._sizeGetter() : this._output.size;
 };
 
+/**
+ * Deprecated: Prefer to use your provided proportions or output of your proportions provider.
+ * @deprecated
+ * @method getProportions
+ * @return {Object} proportions provider object
+ */
+Modifier.prototype.getProportions = function getProportions() {
+    return this._proportionGetter ? this._proportionGetter() : this._output.proportions;
+};
+
 // call providers on tick to receive render spec elements to apply
 function _update() {
     if (this._transformGetter) this._output.transform = this._transformGetter();
@@ -1522,6 +1953,7 @@ function _update() {
     if (this._originGetter) this._output.origin = this._originGetter();
     if (this._alignGetter) this._output.align = this._alignGetter();
     if (this._sizeGetter) this._output.size = this._sizeGetter();
+    if (this._proportionGetter) this._output.proportions = this._proportionGetter();
 }
 
 /**
@@ -1543,7 +1975,7 @@ Modifier.prototype.modify = function modify(target) {
 };
 
 module.exports = Modifier;
-},{"../transitions/Transitionable":87,"../transitions/TransitionableTransform":88,"./Transform":14}],9:[function(_dereq_,module,exports){
+},{"../transitions/Transitionable":88,"../transitions/TransitionableTransform":89,"./Transform":15}],10:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -1654,14 +2086,14 @@ OptionsManager.prototype.key = function key(identifier) {
 };
 
 /**
- * Look up value by key
+ * Look up value by key or get the full options hash
  * @method get
  *
  * @param {string} key key
- * @return {Object} associated object
+ * @return {Object} associated object or full options hash
  */
 OptionsManager.prototype.get = function get(key) {
-    return this._value[key];
+    return key ? this._value[key] : this._value;
 };
 
 /**
@@ -1684,17 +2116,6 @@ OptionsManager.prototype.set = function set(key, value) {
     this._value[key] = value;
     if (this.eventOutput && value !== originalValue) this.eventOutput.emit('change', {id: key, value: value});
     return this;
-};
-
-/**
- * Return entire object contents of this OptionsManager.
- *
- * @method value
- *
- * @return {Object} current state of options
- */
-OptionsManager.prototype.value = function value() {
-    return this._value;
 };
 
 /**
@@ -1754,7 +2175,7 @@ OptionsManager.prototype.unpipe = function unpipe() {
 };
 
 module.exports = OptionsManager;
-},{"./EventHandler":6}],10:[function(_dereq_,module,exports){
+},{"./EventHandler":7}],11:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -1920,7 +2341,7 @@ RenderNode.prototype.render = function render() {
 };
 
 module.exports = RenderNode;
-},{"./Entity":4,"./SpecParser":12}],11:[function(_dereq_,module,exports){
+},{"./Entity":5,"./SpecParser":13}],12:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -2004,6 +2425,9 @@ function _parseTransform(definition) {
                 transform = Transform.multiply(transform, _resolveTransformMatrix(transformDefinition[i]));
             }
         }
+    }
+    else if (transformDefinition instanceof Function) {
+        transform = transformDefinition;
     }
     else if (transformDefinition instanceof Object) {
         transform = _resolveTransformMatrix(transformDefinition);
@@ -2095,7 +2519,7 @@ Scene.prototype.render = function render() {
 };
 
 module.exports = Scene;
-},{"./Modifier":8,"./RenderNode":10,"./Transform":14}],12:[function(_dereq_,module,exports){
+},{"./Modifier":9,"./RenderNode":11,"./Transform":15}],13:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -2178,7 +2602,7 @@ function _vecInContext(v, m) {
     ];
 }
 
-var _originZeroZero = [0, 0];
+var _zeroZero = [0, 0];
 
 // From the provided renderSpec tree, recursively compose opacities,
 //    origins, transforms, and sizes corresponding to each surface id from
@@ -2197,7 +2621,7 @@ SpecParser.prototype._parseSpec = function _parseSpec(spec, parentContext, sizeC
     if (typeof spec === 'number') {
         id = spec;
         transform = parentContext.transform;
-        align = parentContext.align || parentContext.origin;
+        align = parentContext.align || _zeroZero;
         if (parentContext.size && align && (align[0] || align[1])) {
             var alignAdjust = [align[0] * parentContext.size[0], align[1] * parentContext.size[1], 0];
             transform = Transform.thenMove(transform, _vecInContext(alignAdjust, sizeContext));
@@ -2205,8 +2629,8 @@ SpecParser.prototype._parseSpec = function _parseSpec(spec, parentContext, sizeC
         this.result[id] = {
             transform: transform,
             opacity: parentContext.opacity,
-            origin: parentContext.origin || _originZeroZero,
-            align: parentContext.align || parentContext.origin || _originZeroZero,
+            origin: parentContext.origin || _zeroZero,
+            align: parentContext.align || _zeroZero,
             size: parentContext.size
         };
     }
@@ -2234,17 +2658,26 @@ SpecParser.prototype._parseSpec = function _parseSpec(spec, parentContext, sizeC
             nextSizeContext = parentContext.transform;
         }
         if (spec.align) align = spec.align;
-        if (spec.size) {
-            var parentSize = parentContext.size;
-            size = [
-                spec.size[0] !== undefined ? spec.size[0] : parentSize[0],
-                spec.size[1] !== undefined ? spec.size[1] : parentSize[1]
-            ];
+
+        if (spec.size || spec.proportions) {
+            var parentSize = size;
+            size = [size[0], size[1]];
+
+            if (spec.size) {
+                if (spec.size[0] !== undefined) size[0] = spec.size[0];
+                if (spec.size[1] !== undefined) size[1] = spec.size[1];
+            }
+
+            if (spec.proportions) {
+                if (spec.proportions[0] !== undefined) size[0] = size[0] * spec.proportions[0];
+                if (spec.proportions[1] !== undefined) size[1] = size[1] * spec.proportions[1];
+            }
+
             if (parentSize) {
-                if (!align) align = origin;
                 if (align && (align[0] || align[1])) transform = Transform.thenMove(transform, _vecInContext([align[0] * parentSize[0], align[1] * parentSize[1], 0], sizeContext));
                 if (origin && (origin[0] || origin[1])) transform = Transform.moveThen([-origin[0] * size[0], -origin[1] * size[1], 0], transform);
             }
+
             nextSizeContext = parentContext.transform;
             origin = null;
             align = null;
@@ -2261,7 +2694,7 @@ SpecParser.prototype._parseSpec = function _parseSpec(spec, parentContext, sizeC
 };
 
 module.exports = SpecParser;
-},{"./Transform":14}],13:[function(_dereq_,module,exports){
+},{"./Transform":15}],14:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -2271,12 +2704,7 @@ module.exports = SpecParser;
  * @copyright Famous Industries, Inc. 2014
  */
 
-var Entity = _dereq_('./Entity');
-var EventHandler = _dereq_('./EventHandler');
-var Transform = _dereq_('./Transform');
-
-var devicePixelRatio = window.devicePixelRatio || 1;
-var usePrefix = document.createElement('div').style.webkitTransform !== undefined;
+var ElementOutput = _dereq_('./ElementOutput');
 
 /**
  * A base class for viewable content and event
@@ -2289,124 +2717,63 @@ var usePrefix = document.createElement('div').style.webkitTransform !== undefine
  *
  * @param {Object} [options] default option overrides
  * @param {Array.Number} [options.size] [width, height] in pixels
- * @param {Array.string} [options.classes] CSS classes to set on inner content
+ * @param {Array.string} [options.classes] CSS classes to set on target div
  * @param {Array} [options.properties] string dictionary of HTML attributes to set on target div
  * @param {string} [options.content] inner (HTML) content of surface
  */
 function Surface(options) {
+    ElementOutput.call(this);
+
     this.options = {};
 
     this.properties = {};
+    this.attributes = {};
     this.content = '';
     this.classList = [];
     this.size = null;
 
     this._classesDirty = true;
     this._stylesDirty = true;
+    this._attributesDirty = true;
     this._sizeDirty = true;
     this._contentDirty = true;
+    this._trueSizeCheck = true;
 
     this._dirtyClasses = [];
 
-    this._matrix = null;
-    this._opacity = 1;
-    this._origin = null;
-    this._size = null;
-
-    /** @ignore */
-    this.eventForwarder = function eventForwarder(event) {
-        this.emit(event.type, event);
-    }.bind(this);
-    this.eventHandler = new EventHandler();
-    this.eventHandler.bindThis(this);
-
-    this.id = Entity.register(this);
-
     if (options) this.setOptions(options);
 
-    this._currTarget = null;
+    this._currentTarget = null;
 }
+Surface.prototype = Object.create(ElementOutput.prototype);
+Surface.prototype.constructor = Surface;
 Surface.prototype.elementType = 'div';
 Surface.prototype.elementClass = 'famous-surface';
 
 /**
- * Bind a callback function to an event type handled by this object.
+ * Set HTML attributes on this Surface. Note that this will cause
+ *    dirtying and thus re-rendering, even if values do not change.
  *
- * @method "on"
- *
- * @param {string} type event type key (for example, 'click')
- * @param {function(string, Object)} fn handler callback
- * @return {EventHandler} this
+ * @method setAttributes
+* @param {Object} attributes property dictionary of "key" => "value"
  */
-Surface.prototype.on = function on(type, fn) {
-    if (this._currTarget) this._currTarget.addEventListener(type, this.eventForwarder);
-    this.eventHandler.on(type, fn);
+Surface.prototype.setAttributes = function setAttributes(attributes) {
+    for (var n in attributes) {
+        if (n === 'style') throw new Error('Cannot set styles via "setAttributes" as it will break Famo.us.  Use "setProperties" instead.');
+        this.attributes[n] = attributes[n];
+    }
+    this._attributesDirty = true;
 };
 
 /**
- * Unbind an event by type and handler.
- *   This undoes the work of "on"
+ * Get HTML attributes on this Surface.
  *
- * @method removeListener
- * @param {string} type event type key (for example, 'click')
- * @param {function(string, Object)} fn handler
+ * @method getAttributes
+ *
+ * @return {Object} Dictionary of this Surface's attributes.
  */
-Surface.prototype.removeListener = function removeListener(type, fn) {
-    this.eventHandler.removeListener(type, fn);
-};
-
-/**
- * Trigger an event, sending to all downstream handlers
- *   listening for provided 'type' key.
- *
- * @method emit
- *
- * @param {string} type event type key (for example, 'click')
- * @param {Object} [event] event data
- * @return {EventHandler} this
- */
-Surface.prototype.emit = function emit(type, event) {
-    if (event && !event.origin) event.origin = this;
-    var handled = this.eventHandler.emit(type, event);
-    if (handled && event && event.stopPropagation) event.stopPropagation();
-    return handled;
-};
-
-/**
- * Add event handler object to set of downstream handlers.
- *
- * @method pipe
- *
- * @param {EventHandler} target event handler target object
- * @return {EventHandler} passed event handler
- */
-Surface.prototype.pipe = function pipe(target) {
-    return this.eventHandler.pipe(target);
-};
-
-/**
- * Remove handler object from set of downstream handlers.
- *   Undoes work of "pipe"
- *
- * @method unpipe
- *
- * @param {EventHandler} target target handler object
- * @return {EventHandler} provided target
- */
-Surface.prototype.unpipe = function unpipe(target) {
-    return this.eventHandler.unpipe(target);
-};
-
-/**
- * Return spec for this surface. Note that for a base surface, this is
- *    simply an id.
- *
- * @method render
- * @private
- * @return {Object} render spec for this surface (spec id)
- */
-Surface.prototype.render = function render() {
-    return this.id;
+Surface.prototype.getAttributes = function getAttributes() {
+    return this.attributes;
 };
 
 /**
@@ -2414,6 +2781,7 @@ Surface.prototype.render = function render() {
  *    dirtying and thus re-rendering, even if values do not change.
  *
  * @method setProperties
+ * @chainable
  * @param {Object} properties property dictionary of "key" => "value"
  */
 Surface.prototype.setProperties = function setProperties(properties) {
@@ -2421,6 +2789,7 @@ Surface.prototype.setProperties = function setProperties(properties) {
         this.properties[n] = properties[n];
     }
     this._stylesDirty = true;
+    return this;
 };
 
 /**
@@ -2440,6 +2809,7 @@ Surface.prototype.getProperties = function getProperties() {
  *   corresponding rendered <div>.
  *
  * @method addClass
+ * @chainable
  * @param {string} className name of class to add
  */
 Surface.prototype.addClass = function addClass(className) {
@@ -2447,6 +2817,7 @@ Surface.prototype.addClass = function addClass(className) {
         this.classList.push(className);
         this._classesDirty = true;
     }
+    return this;
 };
 
 /**
@@ -2455,6 +2826,7 @@ Surface.prototype.addClass = function addClass(className) {
  *   corresponding rendered <div>.
  *
  * @method removeClass
+ * @chainable
  * @param {string} className name of class to remove
  */
 Surface.prototype.removeClass = function removeClass(className) {
@@ -2463,11 +2835,31 @@ Surface.prototype.removeClass = function removeClass(className) {
         this._dirtyClasses.push(this.classList.splice(i, 1)[0]);
         this._classesDirty = true;
     }
+    return this;
+};
+
+/**
+ * Toggle CSS-style class from the list of classes on this Surface.
+ *   Note this will map directly to the HTML property of the actual
+ *   corresponding rendered <div>.
+ *
+ * @method toggleClass
+ * @param {string} className name of class to toggle
+ */
+Surface.prototype.toggleClass = function toggleClass(className) {
+    var i = this.classList.indexOf(className);
+    if (i >= 0) {
+        this.removeClass(className);
+    } else {
+        this.addClass(className);
+    }
+    return this;
 };
 
 /**
  * Reset class list to provided dictionary.
  * @method setClasses
+ * @chainable
  * @param {Array.string} classList
  */
 Surface.prototype.setClasses = function setClasses(classList) {
@@ -2479,6 +2871,7 @@ Surface.prototype.setClasses = function setClasses(classList) {
     for (i = 0; i < removal.length; i++) this.removeClass(removal[i]);
     // duplicates are already checked by addClass()
     for (i = 0; i < classList.length; i++) this.addClass(classList[i]);
+    return this;
 };
 
 /**
@@ -2496,6 +2889,7 @@ Surface.prototype.getClassList = function getClassList() {
  *    causes a re-rendering if the content has changed.
  *
  * @method setContent
+ * @chainable
  * @param {string|Document Fragment} content HTML content
  */
 Surface.prototype.setContent = function setContent(content) {
@@ -2503,6 +2897,7 @@ Surface.prototype.setContent = function setContent(content) {
         this.content = content;
         this._contentDirty = true;
     }
+    return this;
 };
 
 /**
@@ -2520,33 +2915,19 @@ Surface.prototype.getContent = function getContent() {
  * Set options for this surface
  *
  * @method setOptions
+ * @chainable
  * @param {Object} [options] overrides for default options.  See constructor.
  */
 Surface.prototype.setOptions = function setOptions(options) {
     if (options.size) this.setSize(options.size);
     if (options.classes) this.setClasses(options.classes);
     if (options.properties) this.setProperties(options.properties);
+    if (options.attributes) this.setAttributes(options.attributes);
     if (options.content) this.setContent(options.content);
+    return this;
 };
 
-//  Attach Famous event handling to document events emanating from target
-//    document element.  This occurs just after deployment to the document.
-//    Calling this enables methods like #on and #pipe.
-function _addEventListeners(target) {
-    for (var i in this.eventHandler.listeners) {
-        target.addEventListener(i, this.eventForwarder);
-    }
-}
-
-//  Detach Famous event handling from document events emanating from target
-//  document element.  This occurs just before recall from the document.
-function _removeEventListeners(target) {
-    for (var i in this.eventHandler.listeners) {
-        target.removeEventListener(i, this.eventForwarder);
-    }
-}
-
- //  Apply to document all changes from removeClass() since last setup().
+//  Apply to document all changes from removeClass() since last setup().
 function _cleanupClasses(target) {
     for (var i = 0; i < this._dirtyClasses.length; i++) target.classList.remove(this._dirtyClasses[i]);
     this._dirtyClasses = [];
@@ -2568,79 +2949,21 @@ function _cleanupStyles(target) {
     }
 }
 
-/**
- * Return a Matrix's webkit css representation to be used with the
- *    CSS3 -webkit-transform style.
- *    Example: -webkit-transform: matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,716,243,0,1)
- *
- * @method _formatCSSTransform
- * @private
- * @param {FamousMatrix} m matrix
- * @return {string} matrix3d CSS style representation of the transform
- */
-function _formatCSSTransform(m) {
-    m[12] = Math.round(m[12] * devicePixelRatio) / devicePixelRatio;
-    m[13] = Math.round(m[13] * devicePixelRatio) / devicePixelRatio;
-
-    var result = 'matrix3d(';
-    for (var i = 0; i < 15; i++) {
-        result += (m[i] < 0.000001 && m[i] > -0.000001) ? '0,' : m[i] + ',';
+// Apply values of all Famous-managed attributes to the document element.
+//  These will be deployed to the document on call to #setup().
+function _applyAttributes(target) {
+    for (var n in this.attributes) {
+        target.setAttribute(n, this.attributes[n]);
     }
-    result += m[15] + ')';
-    return result;
 }
 
-/**
- * Directly apply given FamousMatrix to the document element as the
- *   appropriate webkit CSS style.
- *
- * @method setMatrix
- *
- * @static
- * @private
- * @param {Element} element document element
- * @param {FamousMatrix} matrix
- */
-
-var _setMatrix;
-if (navigator.userAgent.toLowerCase().indexOf('firefox') > -1) {
-    _setMatrix = function(element, matrix) {
-        element.style.zIndex = (matrix[14] * 1000000) | 0;    // fix for Firefox z-buffer issues
-        element.style.transform = _formatCSSTransform(matrix);
-    };
+// Clear all Famous-managed attributes from the document element.
+// These will be deployed to the document on call to #setup().
+function _cleanupAttributes(target) {
+    for (var n in this.attributes) {
+        target.removeAttribute(n);
+    }
 }
-else if (usePrefix) {
-    _setMatrix = function(element, matrix) {
-        element.style.webkitTransform = _formatCSSTransform(matrix);
-    };
-}
-else {
-    _setMatrix = function(element, matrix) {
-        element.style.transform = _formatCSSTransform(matrix);
-    };
-}
-
-// format origin as CSS percentage string
-function _formatCSSOrigin(origin) {
-    return (100 * origin[0]) + '% ' + (100 * origin[1]) + '%';
-}
-
- // Directly apply given origin coordinates to the document element as the
- // appropriate webkit CSS style.
-var _setOrigin = usePrefix ? function(element, origin) {
-    element.style.webkitTransformOrigin = _formatCSSOrigin(origin);
-} : function(element, origin) {
-    element.style.transformOrigin = _formatCSSOrigin(origin);
-};
-
- // Shrink given document element until it is effectively invisible.
-var _setInvisible = usePrefix ? function(element) {
-    element.style.webkitTransform = 'scale3d(0.0001,0.0001,1)';
-    element.style.opacity = 0;
-} : function(element) {
-    element.style.transform = 'scale3d(0.0001,0.0001,1)';
-    element.style.opacity = 0;
-};
 
 function _xyNotEquals(a, b) {
     return (a && b) ? (a[0] !== b[0] || a[1] !== b[1]) : a !== b;
@@ -2667,16 +2990,16 @@ Surface.prototype.setup = function setup(allocator) {
         }
     }
     target.style.display = '';
-    _addEventListeners.call(this, target);
-    this._currTarget = target;
+    this.attach(target);
+    this._opacity = null;
+    this._currentTarget = target;
     this._stylesDirty = true;
     this._classesDirty = true;
+    this._attributesDirty = true;
     this._sizeDirty = true;
     this._contentDirty = true;
-    this._matrix = null;
-    this._opacity = undefined;
-    this._origin = null;
-    this._size = null;
+    this._originDirty = true;
+    this._transformDirty = true;
 };
 
 /**
@@ -2689,12 +3012,8 @@ Surface.prototype.setup = function setup(allocator) {
  * @param {Context} context commit context
  */
 Surface.prototype.commit = function commit(context) {
-    if (!this._currTarget) this.setup(context.allocator);
-    var target = this._currTarget;
-
-    var matrix = context.transform;
-    var opacity = context.opacity;
-    var origin = context.origin;
+    if (!this._currentTarget) this.setup(context.allocator);
+    var target = this._currentTarget;
     var size = context.size;
 
     if (this._classesDirty) {
@@ -2702,60 +3021,57 @@ Surface.prototype.commit = function commit(context) {
         var classList = this.getClassList();
         for (var i = 0; i < classList.length; i++) target.classList.add(classList[i]);
         this._classesDirty = false;
+        this._trueSizeCheck = true;
     }
 
     if (this._stylesDirty) {
         _applyStyles.call(this, target);
         this._stylesDirty = false;
+        this._trueSizeCheck = true;
     }
 
-    if (this._contentDirty) {
-        this.deploy(target);
-        this.eventHandler.emit('deploy');
-        this._contentDirty = false;
+    if (this._attributesDirty) {
+        _applyAttributes.call(this, target);
+        this._attributesDirty = false;
+        this._trueSizeCheck = true;
     }
 
     if (this.size) {
-        var origSize = size;
+        var origSize = context.size;
         size = [this.size[0], this.size[1]];
-        if (size[0] === undefined && origSize[0]) size[0] = origSize[0];
-        if (size[1] === undefined && origSize[1]) size[1] = origSize[1];
+        if (size[0] === undefined) size[0] = origSize[0];
+        if (size[1] === undefined) size[1] = origSize[1];
+        if (size[0] === true || size[1] === true) {
+            if (size[0] === true && (this._trueSizeCheck || this._size[0] === 0)) {
+                var width = target.offsetWidth;
+                if (this._size && this._size[0] !== width) {
+                    this._size[0] = width;
+                    this._sizeDirty = true;
+                }
+                size[0] = width;
+            } else {
+                if (this._size) size[0] = this._size[0];
+            }
+            if (size[1] === true && (this._trueSizeCheck || this._size[1] === 0)) {
+                var height = target.offsetHeight;
+                if (this._size && this._size[1] !== height) {
+                    this._size[1] = height;
+                    this._sizeDirty = true;
+                }
+                size[1] = height;
+            } else {
+                if (this._size) size[1] = this._size[1];
+            }
+            this._trueSizeCheck = false;
+        }
     }
-
-    if (size[0] === true) size[0] = target.clientWidth;
-    if (size[1] === true) size[1] = target.clientHeight;
 
     if (_xyNotEquals(this._size, size)) {
         if (!this._size) this._size = [0, 0];
         this._size[0] = size[0];
         this._size[1] = size[1];
+
         this._sizeDirty = true;
-    }
-
-    if (!matrix && this._matrix) {
-        this._matrix = null;
-        this._opacity = 0;
-        _setInvisible(target);
-        return;
-    }
-
-    if (this._opacity !== opacity) {
-        this._opacity = opacity;
-        target.style.opacity = (opacity >= 1) ? '0.999999' : opacity;
-    }
-
-    if (_xyNotEquals(this._origin, origin) || Transform.notEquals(this._matrix, matrix) || this._sizeDirty) {
-        if (!matrix) matrix = Transform.identity;
-        this._matrix = matrix;
-        var aaMatrix = matrix;
-        if (origin) {
-            if (!this._origin) this._origin = [0, 0];
-            this._origin[0] = origin[0];
-            this._origin[1] = origin[1];
-            aaMatrix = Transform.thenMove(matrix, [-this._size[0] * origin[0], -this._size[1] * origin[1], 0]);
-            _setOrigin(target, origin);
-        }
-        _setMatrix(target, aaMatrix);
     }
 
     if (this._sizeDirty) {
@@ -2763,8 +3079,18 @@ Surface.prototype.commit = function commit(context) {
             target.style.width = (this.size && this.size[0] === true) ? '' : this._size[0] + 'px';
             target.style.height = (this.size && this.size[1] === true) ?  '' : this._size[1] + 'px';
         }
-        this._sizeDirty = false;
+
+        this._eventOutput.emit('resize');
     }
+
+    if (this._contentDirty) {
+        this.deploy(target);
+        this._eventOutput.emit('deploy');
+        this._contentDirty = false;
+        this._trueSizeCheck = true;
+    }
+
+    ElementOutput.prototype.commit.call(this, context);
 };
 
 /**
@@ -2778,14 +3104,15 @@ Surface.prototype.commit = function commit(context) {
  */
 Surface.prototype.cleanup = function cleanup(allocator) {
     var i = 0;
-    var target = this._currTarget;
-    this.eventHandler.emit('recall');
+    var target = this._currentTarget;
+    this._eventOutput.emit('recall');
     this.recall(target);
     target.style.display = 'none';
+    target.style.opacity = '';
     target.style.width = '';
     target.style.height = '';
-    this._size = null;
     _cleanupStyles.call(this, target);
+    _cleanupAttributes.call(this, target);
     var classList = this.getClassList();
     _cleanupClasses.call(this, target);
     for (i = 0; i < classList.length; i++) target.classList.remove(classList[i]);
@@ -2799,10 +3126,9 @@ Surface.prototype.cleanup = function cleanup(allocator) {
             target.classList.remove(this.elementClass);
         }
     }
-    _removeEventListeners.call(this, target);
-    this._currTarget = null;
+    this.detach(target);
+    this._currentTarget = null;
     allocator.deallocate(target);
-    _setInvisible(target);
 };
 
 /**
@@ -2838,26 +3164,27 @@ Surface.prototype.recall = function recall(target) {
  *  Get the x and y dimensions of the surface.
  *
  * @method getSize
- * @param {boolean} actual return computed size rather than provided
  * @return {Array.Number} [x,y] size of surface
  */
-Surface.prototype.getSize = function getSize(actual) {
-    return actual ? this._size : (this.size || this._size);
+Surface.prototype.getSize = function getSize() {
+    return this._size ? this._size : this.size;
 };
 
 /**
  * Set x and y dimensions of the surface.
  *
  * @method setSize
+ * @chainable
  * @param {Array.Number} size as [width, height]
  */
 Surface.prototype.setSize = function setSize(size) {
     this.size = size ? [size[0], size[1]] : null;
     this._sizeDirty = true;
+    return this;
 };
 
 module.exports = Surface;
-},{"./Entity":4,"./EventHandler":6,"./Transform":14}],14:[function(_dereq_,module,exports){
+},{"./ElementOutput":3}],15:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -3047,6 +3374,7 @@ Transform.thenScale = function thenScale(m, s) {
  */
 Transform.scale = function scale(x, y, z) {
     if (z === undefined) z = 1;
+    if (y === undefined) y = x;
     return [x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1];
 };
 
@@ -3193,7 +3521,7 @@ Transform.aboutOrigin = function aboutOrigin(v, m) {
  * @return {Transform}
  */
 Transform.skew = function skew(phi, theta, psi) {
-    return [1, 0, 0, 0, Math.tan(psi), 1, 0, 0, Math.tan(theta), Math.tan(phi), 1, 0, 0, 0, 0, 1];
+    return [1, Math.tan(theta), 0, 0, Math.tan(psi), 1, 0, 0, 0, Math.tan(phi), 1, 0, 0, 0, 0, 1];
 };
 
 /**
@@ -3539,7 +3867,7 @@ Transform.inFront = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1e-3, 1];
 Transform.behind = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -1e-3, 1];
 
 module.exports = Transform;
-},{}],15:[function(_dereq_,module,exports){
+},{}],16:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -3552,6 +3880,7 @@ module.exports = Transform;
 var EventHandler = _dereq_('./EventHandler');
 var OptionsManager = _dereq_('./OptionsManager');
 var RenderNode = _dereq_('./RenderNode');
+var Utility = _dereq_('../utilities/Utility');
 
 /**
  * Useful for quickly creating elements within applications
@@ -3573,7 +3902,7 @@ function View(options) {
     EventHandler.setInputHandler(this, this._eventInput);
     EventHandler.setOutputHandler(this, this._eventOutput);
 
-    this.options = Object.create(this.constructor.DEFAULT_OPTIONS || View.DEFAULT_OPTIONS);
+    this.options = Utility.clone(this.constructor.DEFAULT_OPTIONS || View.DEFAULT_OPTIONS);
     this._optionsManager = new OptionsManager(this.options);
 
     if (options) this.setOptions(options);
@@ -3588,8 +3917,8 @@ View.DEFAULT_OPTIONS = {}; // no defaults
  * @param {string} key key
  * @return {Object} associated object
  */
-View.prototype.getOptions = function getOptions() {
-    return this._optionsManager.value();
+View.prototype.getOptions = function getOptions(key) {
+    return this._optionsManager.getOptions(key);
 };
 
 /*
@@ -3647,7 +3976,7 @@ View.prototype.getSize = function getSize() {
 };
 
 module.exports = View;
-},{"./EventHandler":6,"./OptionsManager":9,"./RenderNode":10}],16:[function(_dereq_,module,exports){
+},{"../utilities/Utility":95,"./EventHandler":7,"./OptionsManager":10,"./RenderNode":11}],17:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -3690,6 +4019,8 @@ function ViewSequence(options) {
 
     if (options.loop !== undefined) this._.loop = options.loop;
 
+    if (options.trackSize !== undefined) this._.trackSize = options.trackSize;
+
     this._previousNode = null;
     this._nextNode = null;
 }
@@ -3701,6 +4032,9 @@ ViewSequence.Backing = function Backing(array) {
     this.loop = false;
     this.firstNode = null;
     this.lastNode = null;
+    this.cumulativeSizes = [[0, 0]];
+    this.sizeDirty = true;
+    this.trackSize = false;
 };
 
 // Get value "i" slots away from the first index.
@@ -3713,6 +4047,34 @@ ViewSequence.Backing.prototype.getValue = function getValue(i) {
 // Set value "i" slots away from the first index.
 ViewSequence.Backing.prototype.setValue = function setValue(i, value) {
     this.array[i - this.firstIndex] = value;
+};
+
+// Get sequence size from backing up to index
+// TODO: remove from viewSequence with proper abstraction
+ViewSequence.Backing.prototype.getSize = function getSize(index) {
+    return this.cumulativeSizes[index];
+};
+
+// Calculates cumulative size
+// TODO: remove from viewSequence with proper abstraction
+ViewSequence.Backing.prototype.calculateSize = function calculateSize(index) {
+    index = index || this.array.length;
+    var size = [0, 0];
+    for (var i = 0; i < index; i++) {
+        var nodeSize = this.array[i].getSize();
+        if (!nodeSize) return undefined;
+        if (size[0] !== undefined) {
+            if (nodeSize[0] === undefined) size[0] = undefined;
+            else size[0] += nodeSize[0];
+        }
+        if (size[1] !== undefined) {
+            if (nodeSize[1] === undefined) size[1] = undefined;
+            else size[1] += nodeSize[1];
+        }
+        this.cumulativeSizes[i + 1] = size.slice();
+    }
+    this.sizeDirty = false;
+    return size;
 };
 
 // After splicing into the backing store, restore the indexes of each node correctly.
@@ -3756,6 +4118,7 @@ ViewSequence.Backing.prototype.reindex = function reindex(start, removeCount, in
             index++;
         }
     }
+    if (this.trackSize) this.sizeDirty = true;
 };
 
 /**
@@ -3765,9 +4128,13 @@ ViewSequence.Backing.prototype.reindex = function reindex(start, removeCount, in
  * @return {ViewSequence} previous node.
  */
 ViewSequence.prototype.getPrevious = function getPrevious() {
-    if (this.index === this._.firstIndex) {
+    var len = this._.array.length;
+    if (!len) {
+        this._previousNode = null;
+    }
+    else if (this.index === this._.firstIndex) {
         if (this._.loop) {
-            this._previousNode = this._.lastNode || new (this.constructor)({_: this._, index: this._.firstIndex + this._.array.length - 1});
+            this._previousNode = this._.lastNode || new (this.constructor)({_: this._, index: this._.firstIndex + len - 1});
             this._previousNode._nextNode = this;
         }
         else {
@@ -3788,7 +4155,11 @@ ViewSequence.prototype.getPrevious = function getPrevious() {
  * @return {ViewSequence} previous node.
  */
 ViewSequence.prototype.getNext = function getNext() {
-    if (this.index === this._.firstIndex + this._.array.length - 1) {
+    var len = this._.array.length;
+    if (!len) {
+        this._nextNode = null;
+    }
+    else if (this.index === this._.firstIndex + len - 1) {
         if (this._.loop) {
             this._nextNode = this._.firstNode || new (this.constructor)({_: this._, index: this._.firstIndex});
             this._nextNode._previousNode = this;
@@ -3802,6 +4173,16 @@ ViewSequence.prototype.getNext = function getNext() {
         this._nextNode._previousNode = this;
     }
     return this._nextNode;
+};
+
+/**
+ * Return index of the provided item in the backing array
+ *
+ * @method indexOf
+ * @return {Number} index or -1 if not found
+ */
+ViewSequence.prototype.indexOf = function indexOf(item) {
+    return this._.array.indexOf(item);
 };
 
 /**
@@ -3833,6 +4214,7 @@ ViewSequence.prototype.toString = function toString() {
 ViewSequence.prototype.unshift = function unshift(value) {
     this._.array.unshift.apply(this._.array, arguments);
     this._.firstIndex -= arguments.length;
+    if (this._.trackSize) this._.sizeDirty = true;
 };
 
 /**
@@ -3843,6 +4225,7 @@ ViewSequence.prototype.unshift = function unshift(value) {
  */
 ViewSequence.prototype.push = function push(value) {
     this._.array.push.apply(this._.array, arguments);
+    if (this._.trackSize) this._.sizeDirty = true;
 };
 
 /**
@@ -3894,6 +4277,7 @@ ViewSequence.prototype.swap = function swap(other) {
     else if (this.index === this._.firstIndex + this._.array.length - 1) this._.lastNode = this;
     if (other.index === this._.firstIndex) this._.firstNode = other;
     else if (other.index === this._.firstIndex + this._.array.length - 1) this._.lastNode = other;
+    if (this._.trackSize) this._.sizeDirty = true;
 };
 
    /**
@@ -3925,15 +4309,17 @@ ViewSequence.prototype.getSize = function getSize() {
  * @return {number} Render spec for this component
  */
 ViewSequence.prototype.render = function render() {
+    if (this._.trackSize && this._.sizeDirty) this._.calculateSize();
     var target = this.get();
     return target ? target.render.apply(target, arguments) : null;
 };
 
 module.exports = ViewSequence;
-},{}],17:[function(_dereq_,module,exports){
+},{}],18:[function(_dereq_,module,exports){
 module.exports = {
   Context: _dereq_('./Context'),
   ElementAllocator: _dereq_('./ElementAllocator'),
+  ElementOutput: _dereq_('./ElementOutput'),
   Engine: _dereq_('./Engine'),
   Entity: _dereq_('./Entity'),
   EventEmitter: _dereq_('./EventEmitter'),
@@ -3950,7 +4336,7 @@ module.exports = {
   ViewSequence: _dereq_('./ViewSequence')
 };
 
-},{"./Context":1,"./ElementAllocator":2,"./Engine":3,"./Entity":4,"./EventEmitter":5,"./EventHandler":6,"./Group":7,"./Modifier":8,"./OptionsManager":9,"./RenderNode":10,"./Scene":11,"./SpecParser":12,"./Surface":13,"./Transform":14,"./View":15,"./ViewSequence":16}],18:[function(_dereq_,module,exports){
+},{"./Context":1,"./ElementAllocator":2,"./ElementOutput":3,"./Engine":4,"./Entity":5,"./EventEmitter":6,"./EventHandler":7,"./Group":8,"./Modifier":9,"./OptionsManager":10,"./RenderNode":11,"./Scene":12,"./SpecParser":13,"./Surface":14,"./Transform":15,"./View":16,"./ViewSequence":17}],19:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4033,7 +4419,7 @@ EventArbiter.prototype.emit = function emit(eventType, event) {
 };
 
 module.exports = EventArbiter;
-},{"../core/EventHandler":6}],19:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7}],20:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4089,7 +4475,7 @@ EventFilter.prototype.emit = function emit(type, data) {
 EventFilter.prototype.trigger = EventFilter.prototype.emit;
 
 module.exports = EventFilter;
-},{"../core/EventHandler":6}],20:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7}],21:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4143,29 +4529,29 @@ EventMapper.prototype.emit = function emit(type, data) {
 EventMapper.prototype.trigger = EventMapper.prototype.emit;
 
 module.exports = EventMapper;
-},{"../core/EventHandler":6}],21:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7}],22:[function(_dereq_,module,exports){
 module.exports = {
   EventArbiter: _dereq_('./EventArbiter'),
   EventFilter: _dereq_('./EventFilter'),
   EventMapper: _dereq_('./EventMapper')
 };
 
-},{"./EventArbiter":18,"./EventFilter":19,"./EventMapper":20}],22:[function(_dereq_,module,exports){
+},{"./EventArbiter":19,"./EventFilter":20,"./EventMapper":21}],23:[function(_dereq_,module,exports){
 module.exports = {
   core: _dereq_('./core'),
   events: _dereq_('./events'),
-  math: _dereq_('./math'),
-  physics: _dereq_('./physics'),
   inputs: _dereq_('./inputs'),
+  math: _dereq_('./math'),
   modifiers: _dereq_('./modifiers'),
-  surfaces: _dereq_('./surfaces'),
+  physics: _dereq_('./physics'),
   utilities: _dereq_('./utilities'),
-  transitions: _dereq_('./transitions'),
   widgets: _dereq_('./widgets'),
+  transitions: _dereq_('./transitions'),
+  surfaces: _dereq_('./surfaces'),
   views: _dereq_('./views')
 };
 
-},{"./core":17,"./events":21,"./inputs":35,"./math":41,"./modifiers":46,"./physics":70,"./surfaces":81,"./transitions":91,"./utilities":95,"./views":109,"./widgets":114}],23:[function(_dereq_,module,exports){
+},{"./core":18,"./events":22,"./inputs":36,"./math":42,"./modifiers":47,"./physics":71,"./surfaces":82,"./transitions":92,"./utilities":96,"./views":111,"./widgets":116}],24:[function(_dereq_,module,exports){
 var EventHandler = _dereq_('../core/EventHandler');
 var Transitionable = _dereq_('../transitions/Transitionable');
 
@@ -4225,7 +4611,7 @@ Accumulator.prototype.set = function set(value) {
 };
 
 module.exports = Accumulator;
-},{"../core/EventHandler":6,"../transitions/Transitionable":87}],24:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7,"../transitions/Transitionable":88}],25:[function(_dereq_,module,exports){
 var hasTouch = 'ontouchstart' in window;
 
 function kill(type) {
@@ -4241,7 +4627,7 @@ if (hasTouch) {
     kill('mouseup');
     kill('mouseleave');
 }
-},{}],25:[function(_dereq_,module,exports){
+},{}],26:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4259,56 +4645,58 @@ if (hasTouch) {
  *   threshold to the 'click' event.
  *   This is used to speed up clicks on some browsers.
  */
-if (!window.CustomEvent) return;
-var clickThreshold = 300;
-var clickWindow = 500;
-var potentialClicks = {};
-var recentlyDispatched = {};
-var _now = Date.now;
+(function() {
+  if (!window.CustomEvent) return;
+  var clickThreshold = 300;
+  var clickWindow = 500;
+  var potentialClicks = {};
+  var recentlyDispatched = {};
+  var _now = Date.now;
 
-window.addEventListener('touchstart', function(event) {
-    var timestamp = _now();
-    for (var i = 0; i < event.changedTouches.length; i++) {
-        var touch = event.changedTouches[i];
-        potentialClicks[touch.identifier] = timestamp;
-    }
-});
+  window.addEventListener('touchstart', function(event) {
+      var timestamp = _now();
+      for (var i = 0; i < event.changedTouches.length; i++) {
+          var touch = event.changedTouches[i];
+          potentialClicks[touch.identifier] = timestamp;
+      }
+  });
 
-window.addEventListener('touchmove', function(event) {
-    for (var i = 0; i < event.changedTouches.length; i++) {
-        var touch = event.changedTouches[i];
-        delete potentialClicks[touch.identifier];
-    }
-});
+  window.addEventListener('touchmove', function(event) {
+      for (var i = 0; i < event.changedTouches.length; i++) {
+          var touch = event.changedTouches[i];
+          delete potentialClicks[touch.identifier];
+      }
+  });
 
-window.addEventListener('touchend', function(event) {
-    var currTime = _now();
-    for (var i = 0; i < event.changedTouches.length; i++) {
-        var touch = event.changedTouches[i];
-        var startTime = potentialClicks[touch.identifier];
-        if (startTime && currTime - startTime < clickThreshold) {
-            var clickEvt = new window.CustomEvent('click', {
-                'bubbles': true,
-                'detail': touch
-            });
-            recentlyDispatched[currTime] = event;
-            event.target.dispatchEvent(clickEvt);
-        }
-        delete potentialClicks[touch.identifier];
-    }
-});
+  window.addEventListener('touchend', function(event) {
+      var currTime = _now();
+      for (var i = 0; i < event.changedTouches.length; i++) {
+          var touch = event.changedTouches[i];
+          var startTime = potentialClicks[touch.identifier];
+          if (startTime && currTime - startTime < clickThreshold) {
+              var clickEvt = new window.CustomEvent('click', {
+                  'bubbles': true,
+                  'detail': touch
+              });
+              recentlyDispatched[currTime] = event;
+              event.target.dispatchEvent(clickEvt);
+          }
+          delete potentialClicks[touch.identifier];
+      }
+  });
 
-window.addEventListener('click', function(event) {
-    var currTime = _now();
-    for (var i in recentlyDispatched) {
-        var previousEvent = recentlyDispatched[i];
-        if (currTime - i < clickWindow) {
-            if (event instanceof window.MouseEvent && event.target === previousEvent.target) event.stopPropagation();
-        }
-        else delete recentlyDispatched[i];
-    }
-}, true);
-},{}],26:[function(_dereq_,module,exports){
+  window.addEventListener('click', function(event) {
+      var currTime = _now();
+      for (var i in recentlyDispatched) {
+          var previousEvent = recentlyDispatched[i];
+          if (currTime - i < clickWindow) {
+              if (event instanceof window.MouseEvent && event.target === previousEvent.target) event.stopPropagation();
+          }
+          else delete recentlyDispatched[i];
+      }
+  }, true);
+})();
+},{}],27:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4317,7 +4705,6 @@ window.addEventListener('click', function(event) {
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
-
 var EventHandler = _dereq_('../core/EventHandler');
 
 /**
@@ -4432,7 +4819,7 @@ GenericSync.prototype.addSync = function addSync(syncs) {
 };
 
 module.exports = GenericSync;
-},{"../core/EventHandler":6}],27:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7}],28:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4441,25 +4828,41 @@ module.exports = GenericSync;
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
-
 var EventHandler = _dereq_('../core/EventHandler');
+var OptionsManager = _dereq_('../core/OptionsManager');
 
 /**
- * Handles piped in mouse drag events. Outputs an object with two
- *   properties, position and velocity.
- *   Emits 'start', 'update' and 'end' events with DOM event passthroughs,
- *   with position, velocity, and a delta key.
+ * Handles piped in mouse drag events. Outputs an object with the position delta from last frame, position from start,
+ * current velocity averaged out over the velocitySampleLength (set via options), clientX, clientY, offsetX, and offsetY.
+ *
+ * Emits 'start', 'update' and 'end' events. Designed to be used either as a standalone MouseSync, or as part of a
+ * GenericSync.
  *
  * @class MouseSync
  * @constructor
  *
- * @param [options] {Object}             default options overrides
- * @param [options.direction] {Number}   read from a particular axis
- * @param [options.rails] {Boolean}      read from axis with greatest differential
- * @param [options.propogate] {Boolean}  add listened to document on mouseleave
+ * @example
+ *   var Surface = require('../core/Surface');
+ *   var MouseSync = require('../inputs/MouseSync');
+ *
+ *   var surface = new Surface({ size: [100, 100] });
+ *   var mouseSync = new MouseSync();
+ *   surface.pipe(mouseSync);
+ *
+ *   mouseSync.on('start', function (e) { // react to start });
+ *   mouseSync.on('update', function (e) { // react to update });
+ *   mouseSync.on('end', function (e) { // react to end });
+ *
+ * @param [options] {Object}                An object of the following configurable options.
+ * @param [options.direction] {Number}      Read from a particular axis. Valid options are: undefined, 0 or 1. 0 corresponds to x, and 1 to y. Default is undefined, which allows both x and y.
+ * @param [options.rails] {Boolean}         Read from axis with the greatest differential.
+ * @param [options.velocitySampleLength] {Number}  Number of previous frames to check velocity against.
+ * @param [options.propogate] {Boolean}     Add a listener to document on mouseleave. This allows drag events to continue across the entire page.
  */
 function MouseSync(options) {
     this.options =  Object.create(MouseSync.DEFAULT_OPTIONS);
+    this._optionsManager = new OptionsManager(this.options);
+
     if (options) this.setOptions(options);
 
     this._eventInput = new EventHandler();
@@ -4485,18 +4888,22 @@ function MouseSync(options) {
         offsetY  : 0
     };
 
+    this._positionHistory = [];
     this._position = null;      // to be deprecated
     this._prevCoord = undefined;
     this._prevTime = undefined;
     this._down = false;
     this._moved = false;
+    this._documentActive = false;
 }
 
 MouseSync.DEFAULT_OPTIONS = {
     direction: undefined,
     rails: false,
     scale: 1,
-    propogate: true  // events piped to document on mouseleave
+    propogate: true,  // events piped to document on mouseleave
+    velocitySampleLength: 10,
+    preventDefault: true
 };
 
 MouseSync.DIRECTION_X = 0;
@@ -4504,22 +4911,26 @@ MouseSync.DIRECTION_Y = 1;
 
 var MINIMUM_TICK_TIME = 8;
 
-var _now = Date.now;
-
+/**
+ *  Triggered by mousedown.
+ *
+ *  @method _handleStart
+ *  @private
+ */
 function _handleStart(event) {
     var delta;
     var velocity;
-    event.preventDefault(); // prevent drag
+    if (this.options.preventDefault) event.preventDefault(); // prevent drag
 
     var x = event.clientX;
     var y = event.clientY;
 
     this._prevCoord = [x, y];
-    this._prevTime = _now();
+    this._prevTime = Date.now();
     this._down = true;
     this._move = false;
 
-    if (this.options.direction !== undefined){
+    if (this.options.direction !== undefined) {
         this._position = 0;
         delta = 0;
         velocity = 0;
@@ -4539,9 +4950,21 @@ function _handleStart(event) {
     payload.offsetX = event.offsetX;
     payload.offsetY = event.offsetY;
 
+    this._positionHistory.push({
+        position: payload.position.slice ? payload.position.slice(0) : payload.position,
+        time: this._prevTime
+    });
+
     this._eventOutput.emit('start', payload);
+    this._documentActive = false;
 }
 
+/**
+ *  Triggered by mousemove.
+ *
+ *  @method _handleMove
+ *  @private
+ */
 function _handleMove(event) {
     if (!this._prevCoord) return;
 
@@ -4551,7 +4974,7 @@ function _handleMove(event) {
     var x = event.clientX;
     var y = event.clientY;
 
-    var currTime = _now();
+    var currTime = Date.now();
 
     var diffX = x - prevCoord[0];
     var diffY = y - prevCoord[1];
@@ -4561,10 +4984,7 @@ function _handleMove(event) {
         else diffX = 0;
     }
 
-    var diffTime = Math.max(currTime - prevTime, MINIMUM_TICK_TIME); // minimum tick time
-
-    var velX = diffX / diffTime;
-    var velY = diffY / diffTime;
+    var diffTime = Math.max(currTime - this._positionHistory[0].time, MINIMUM_TICK_TIME); // minimum tick time
 
     var scale = this.options.scale;
     var nextVel;
@@ -4572,17 +4992,20 @@ function _handleMove(event) {
 
     if (this.options.direction === MouseSync.DIRECTION_X) {
         nextDelta = scale * diffX;
-        nextVel = scale * velX;
         this._position += nextDelta;
+        nextVel = scale * (this._position - this._positionHistory[0].position) / diffTime;
     }
     else if (this.options.direction === MouseSync.DIRECTION_Y) {
         nextDelta = scale * diffY;
-        nextVel = scale * velY;
         this._position += nextDelta;
+        nextVel = scale * (this._position - this._positionHistory[0].position) / diffTime;
     }
     else {
         nextDelta = [scale * diffX, scale * diffY];
-        nextVel = [scale * velX, scale * velY];
+        nextVel = [
+            scale * (this._position[0] - this._positionHistory[0].position[0]) / diffTime,
+            scale * (this._position[1] - this._positionHistory[0].position[1]) / diffTime
+        ];
         this._position[0] += nextDelta[0];
         this._position[1] += nextDelta[1];
     }
@@ -4596,6 +5019,15 @@ function _handleMove(event) {
     payload.offsetX  = event.offsetX;
     payload.offsetY  = event.offsetY;
 
+    if (this._positionHistory.length === this.options.velocitySampleLength) {
+      this._positionHistory.shift();
+    }
+
+    this._positionHistory.push({
+      position: payload.position.slice ? payload.position.slice(0) : payload.position,
+      time: currTime
+    });
+
     this._eventOutput.emit('update', payload);
 
     this._prevCoord = [x, y];
@@ -4603,6 +5035,13 @@ function _handleMove(event) {
     this._move = true;
 }
 
+/**
+ *  Triggered by mouseup on the element or document body if propagation is enabled, or
+ *  mouseleave if propagation is off.
+ *
+ *  @method _handleEnd
+ *  @private
+ */
 function _handleEnd(event) {
     if (!this._down) return;
 
@@ -4611,20 +5050,28 @@ function _handleEnd(event) {
     this._prevTime = undefined;
     this._down = false;
     this._move = false;
+    this._positionHistory = [];
 }
 
+/**
+ *  Switches the mousemove listener to the document body, if propagation is enabled.
+ *  @method _handleLeave
+ *  @private
+ */
 function _handleLeave(event) {
     if (!this._down || !this._move) return;
 
-    var boundMove = _handleMove.bind(this);
-    var boundEnd = function(event) {
-        _handleEnd.call(this, event);
-        document.removeEventListener('mousemove', boundMove);
-        document.removeEventListener('mouseup', boundEnd);
-    }.bind(this, event);
-
-    document.addEventListener('mousemove', boundMove);
-    document.addEventListener('mouseup', boundEnd);
+    if (!this._documentActive) {
+      var boundMove = _handleMove.bind(this);
+      var boundEnd = function(event) {
+          _handleEnd.call(this, event);
+          document.removeEventListener('mousemove', boundMove);
+          document.removeEventListener('mouseup', boundEnd);
+      }.bind(this, event);
+      document.addEventListener('mousemove', boundMove);
+      document.addEventListener('mouseup', boundEnd);
+      this._documentActive = true;
+    }
 }
 
 /**
@@ -4648,14 +5095,11 @@ MouseSync.prototype.getOptions = function getOptions() {
  * @param [options.propogate] {Boolean}  add listened to document on mouseleave
  */
 MouseSync.prototype.setOptions = function setOptions(options) {
-    if (options.direction !== undefined) this.options.direction = options.direction;
-    if (options.rails !== undefined) this.options.rails = options.rails;
-    if (options.scale !== undefined) this.options.scale = options.scale;
-    if (options.propogate !== undefined) this.options.propogate = options.propogate;
+    return this._optionsManager.setOptions(options);
 };
 
 module.exports = MouseSync;
-},{"../core/EventHandler":6}],28:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7,"../core/OptionsManager":10}],29:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4664,8 +5108,8 @@ module.exports = MouseSync;
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
-
 var TwoFingerSync = _dereq_('./TwoFingerSync');
+var OptionsManager = _dereq_('../core/OptionsManager');
 
 /**
  * Handles piped in two-finger touch events to change position via pinching / expanding.
@@ -4682,6 +5126,7 @@ function PinchSync(options) {
     TwoFingerSync.call(this);
 
     this.options = Object.create(PinchSync.DEFAULT_OPTIONS);
+    this._optionsManager = new OptionsManager(this.options);
     if (options) this.setOptions(options);
 
     this._displacement = 0;
@@ -4747,11 +5192,11 @@ PinchSync.prototype.getOptions = function getOptions() {
  * @param {Number} [options.scale] scale velocity by this factor
  */
 PinchSync.prototype.setOptions = function setOptions(options) {
-    if (options.scale !== undefined) this.options.scale = options.scale;
+    return this._optionsManager.setOptions(options);
 };
 
 module.exports = PinchSync;
-},{"./TwoFingerSync":34}],29:[function(_dereq_,module,exports){
+},{"../core/OptionsManager":10,"./TwoFingerSync":35}],30:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4760,8 +5205,8 @@ module.exports = PinchSync;
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
-
 var TwoFingerSync = _dereq_('./TwoFingerSync');
+var OptionsManager = _dereq_('../core/OptionsManager');
 
 /**
  * Handles piped in two-finger touch events to increase or decrease scale via pinching / expanding.
@@ -4778,6 +5223,7 @@ function RotateSync(options) {
     TwoFingerSync.call(this);
 
     this.options = Object.create(RotateSync.DEFAULT_OPTIONS);
+    this._optionsManager = new OptionsManager(this.options);
     if (options) this.setOptions(options);
 
     this._angle = 0;
@@ -4844,11 +5290,11 @@ RotateSync.prototype.getOptions = function getOptions() {
  * @param {Number} [options.scale] scale velocity by this factor
  */
 RotateSync.prototype.setOptions = function setOptions(options) {
-    if (options.scale !== undefined) this.options.scale = options.scale;
+    return this._optionsManager.setOptions(options);
 };
 
 module.exports = RotateSync;
-},{"./TwoFingerSync":34}],30:[function(_dereq_,module,exports){
+},{"../core/OptionsManager":10,"./TwoFingerSync":35}],31:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4857,8 +5303,8 @@ module.exports = RotateSync;
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
-
 var TwoFingerSync = _dereq_('./TwoFingerSync');
+var OptionsManager = _dereq_('../core/OptionsManager');
 
 /**
  * Handles piped in two-finger touch events to increase or decrease scale via pinching / expanding.
@@ -4875,6 +5321,7 @@ function ScaleSync(options) {
     TwoFingerSync.call(this);
 
     this.options = Object.create(ScaleSync.DEFAULT_OPTIONS);
+    this._optionsManager = new OptionsManager(this.options);
     if (options) this.setOptions(options);
 
     this._scaleFactor = 1;
@@ -4948,11 +5395,11 @@ ScaleSync.prototype.getOptions = function getOptions() {
  * @param {Number} [options.scale] scale velocity by this factor
  */
 ScaleSync.prototype.setOptions = function setOptions(options) {
-    if (options.scale !== undefined) this.options.scale = options.scale;
+    return this._optionsManager.setOptions(options);
 };
 
 module.exports = ScaleSync;
-},{"./TwoFingerSync":34}],31:[function(_dereq_,module,exports){
+},{"../core/OptionsManager":10,"./TwoFingerSync":35}],32:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -4961,9 +5408,9 @@ module.exports = ScaleSync;
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
-
 var EventHandler = _dereq_('../core/EventHandler');
 var Engine = _dereq_('../core/Engine');
+var OptionsManager = _dereq_('../core/OptionsManager');
 
 /**
  * Handles piped in mousewheel events.
@@ -4987,6 +5434,7 @@ var Engine = _dereq_('../core/Engine');
  */
 function ScrollSync(options) {
     this.options = Object.create(ScrollSync.DEFAULT_OPTIONS);
+    this._optionsManager = new OptionsManager(this.options);
     if (options) this.setOptions(options);
 
     this._payload = {
@@ -5017,7 +5465,8 @@ ScrollSync.DEFAULT_OPTIONS = {
     rails: false,
     scale: 1,
     stallTime: 50,
-    lineHeight: 40
+    lineHeight: 40,
+    preventDefault: true
 };
 
 ScrollSync.DIRECTION_X = 0;
@@ -5045,7 +5494,7 @@ function _newFrame() {
 }
 
 function _handleMove(event) {
-    event.preventDefault();
+    if (this.options.preventDefault) event.preventDefault();
 
     if (!this._inProgress) {
         this._inProgress = true;
@@ -5142,15 +5591,11 @@ ScrollSync.prototype.getOptions = function getOptions() {
  * @param {Number} [options.scale] constant factor to scale velocity output
  */
 ScrollSync.prototype.setOptions = function setOptions(options) {
-    if (options.direction !== undefined) this.options.direction = options.direction;
-    if (options.minimumEndSpeed !== undefined) this.options.minimumEndSpeed = options.minimumEndSpeed;
-    if (options.rails !== undefined) this.options.rails = options.rails;
-    if (options.scale !== undefined) this.options.scale = options.scale;
-    if (options.stallTime !== undefined) this.options.stallTime = options.stallTime;
+    return this._optionsManager.setOptions(options);
 };
 
 module.exports = ScrollSync;
-},{"../core/Engine":3,"../core/EventHandler":6}],32:[function(_dereq_,module,exports){
+},{"../core/Engine":4,"../core/EventHandler":7,"../core/OptionsManager":10}],33:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -5159,30 +5604,47 @@ module.exports = ScrollSync;
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
-
 var TouchTracker = _dereq_('./TouchTracker');
 var EventHandler = _dereq_('../core/EventHandler');
+var OptionsManager = _dereq_('../core/OptionsManager');
 
 /**
  * Handles piped in touch events. Emits 'start', 'update', and 'events'
- *   events with position, velocity, acceleration, and touch id.
- *   Useful for dealing with inputs on touch devices.
- *
+ *   events with delta, position, velocity, acceleration, clientX, clientY, count, and touch id.
+ *   Useful for dealing with inputs on touch devices. Designed to be used either as standalone, or
+ *   included in a GenericSync.
  *
  * @class TouchSync
  * @constructor
  *
+ * @example
+ *   var Surface = require('../core/Surface');
+ *   var TouchSync = require('../inputs/TouchSync');
+ *
+ *   var surface = new Surface({ size: [100, 100] });
+ *   var touchSync = new TouchSync();
+ *   surface.pipe(touchSync);
+ *
+ *   touchSync.on('start', function (e) { // react to start });
+ *   touchSync.on('update', function (e) { // react to update });
+ *   touchSync.on('end', function (e) { // react to end });*
+ *
  * @param [options] {Object}             default options overrides
  * @param [options.direction] {Number}   read from a particular axis
  * @param [options.rails] {Boolean}      read from axis with greatest differential
+ * @param [options.velocitySampleLength] {Number}  Number of previous frames to check velocity against.
  * @param [options.scale] {Number}       constant factor to scale velocity output
+ * @param [options.touchLimit] {Number}  touchLimit upper bound for emitting events based on number of touches
  */
 function TouchSync(options) {
     this.options =  Object.create(TouchSync.DEFAULT_OPTIONS);
+    this._optionsManager = new OptionsManager(this.options);
     if (options) this.setOptions(options);
 
     this._eventOutput = new EventHandler();
-    this._touchTracker = new TouchTracker();
+    this._touchTracker = new TouchTracker({
+        touchLimit: this.options.touchLimit
+    });
 
     EventHandler.setOutputHandler(this, this._eventOutput);
     EventHandler.setInputHandler(this, this._touchTracker);
@@ -5207,6 +5669,8 @@ function TouchSync(options) {
 TouchSync.DEFAULT_OPTIONS = {
     direction: undefined,
     rails: false,
+    touchLimit: 1,
+    velocitySampleLength: 10,
     scale: 1
 };
 
@@ -5215,7 +5679,11 @@ TouchSync.DIRECTION_Y = 1;
 
 var MINIMUM_TICK_TIME = 8;
 
-// handle 'trackstart'
+/**
+ *  Triggered by trackstart.
+ *  @method _handleStart
+ *  @private
+ */
 function _handleStart(data) {
     var velocity;
     var delta;
@@ -5242,28 +5710,42 @@ function _handleStart(data) {
     this._eventOutput.emit('start', payload);
 }
 
-// handle 'trackmove'
+/**
+ *  Triggered by trackmove.
+ *  @method _handleMove
+ *  @private
+ */
 function _handleMove(data) {
     var history = data.history;
 
     var currHistory = history[history.length - 1];
     var prevHistory = history[history.length - 2];
 
-    var prevTime = prevHistory.timestamp;
+    var distantHistory = history[history.length - this.options.velocitySampleLength] ?
+      history[history.length - this.options.velocitySampleLength] :
+      history[history.length - 2];
+
+    var distantTime = distantHistory.timestamp;
     var currTime = currHistory.timestamp;
 
     var diffX = currHistory.x - prevHistory.x;
     var diffY = currHistory.y - prevHistory.y;
 
+    var velDiffX = currHistory.x - distantHistory.x;
+    var velDiffY = currHistory.y - distantHistory.y;
+
     if (this.options.rails) {
         if (Math.abs(diffX) > Math.abs(diffY)) diffY = 0;
         else diffX = 0;
+
+        if (Math.abs(velDiffX) > Math.abs(velDiffY)) velDiffY = 0;
+        else velDiffX = 0;
     }
 
-    var diffTime = Math.max(currTime - prevTime, MINIMUM_TICK_TIME);
+    var diffTime = Math.max(currTime - distantTime, MINIMUM_TICK_TIME);
 
-    var velX = diffX / diffTime;
-    var velY = diffY / diffTime;
+    var velX = velDiffX / diffTime;
+    var velY = velDiffY / diffTime;
 
     var scale = this.options.scale;
     var nextVel;
@@ -5298,7 +5780,11 @@ function _handleMove(data) {
     this._eventOutput.emit('update', payload);
 }
 
-// handle 'trackend'
+/**
+ *  Triggered by trackend.
+ *  @method _handleEnd
+ *  @private
+ */
 function _handleEnd(data) {
     this._payload.count = data.count;
     this._eventOutput.emit('end', this._payload);
@@ -5315,9 +5801,7 @@ function _handleEnd(data) {
  * @param [options.scale] {Number}       constant factor to scale velocity output
  */
 TouchSync.prototype.setOptions = function setOptions(options) {
-    if (options.direction !== undefined) this.options.direction = options.direction;
-    if (options.rails !== undefined) this.options.rails = options.rails;
-    if (options.scale !== undefined) this.options.scale = options.scale;
+    return this._optionsManager.setOptions(options);
 };
 
 /**
@@ -5331,7 +5815,7 @@ TouchSync.prototype.getOptions = function getOptions() {
 };
 
 module.exports = TouchSync;
-},{"../core/EventHandler":6,"./TouchTracker":33}],33:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7,"../core/OptionsManager":10,"./TouchTracker":34}],34:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -5340,7 +5824,6 @@ module.exports = TouchSync;
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
-
 var EventHandler = _dereq_('../core/EventHandler');
 
 var _now = Date.now;
@@ -5358,6 +5841,9 @@ function _timestampTouch(touch, event, history) {
 }
 
 function _handleStart(event) {
+    if (event.touches.length > this.touchLimit) return;
+    this.isTouched = true;
+
     for (var i = 0; i < event.changedTouches.length; i++) {
         var touch = event.changedTouches[i];
         var data = _timestampTouch(touch, event, null);
@@ -5367,6 +5853,8 @@ function _handleStart(event) {
 }
 
 function _handleMove(event) {
+    if (event.touches.length > this.touchLimit) return;
+
     for (var i = 0; i < event.changedTouches.length; i++) {
         var touch = event.changedTouches[i];
         var history = this.touchHistory[touch.identifier];
@@ -5379,6 +5867,8 @@ function _handleMove(event) {
 }
 
 function _handleEnd(event) {
+    if (!this.isTouched) return;
+
     for (var i = 0; i < event.changedTouches.length; i++) {
         var touch = event.changedTouches[i];
         var history = this.touchHistory[touch.identifier];
@@ -5388,6 +5878,8 @@ function _handleEnd(event) {
             delete this.touchHistory[touch.identifier];
         }
     }
+
+    this.isTouched = false;
 }
 
 function _handleUnpipe() {
@@ -5410,10 +5902,14 @@ function _handleUnpipe() {
  *
  * @class TouchTracker
  * @constructor
- * @param {Boolean} selective if false, save state for each touch.
+ * @param {Object} options default options overrides
+ * @param [options.selective] {Boolean} selective if false, saves state for each touch
+ * @param [options.touchLimit] {Number} touchLimit upper bound for emitting events based on number of touches
  */
-function TouchTracker(selective) {
-    this.selective = selective;
+function TouchTracker(options) {
+    this.selective = options.selective;
+    this.touchLimit = options.touchLimit || 1;
+
     this.touchHistory = {};
 
     this.eventInput = new EventHandler();
@@ -5427,6 +5923,8 @@ function TouchTracker(selective) {
     this.eventInput.on('touchend', _handleEnd.bind(this));
     this.eventInput.on('touchcancel', _handleEnd.bind(this));
     this.eventInput.on('unpipe', _handleUnpipe.bind(this));
+
+    this.isTouched = false;
 }
 
 /**
@@ -5440,7 +5938,7 @@ TouchTracker.prototype.track = function track(data) {
 };
 
 module.exports = TouchTracker;
-},{"../core/EventHandler":6}],34:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7}],35:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -5449,7 +5947,6 @@ module.exports = TouchTracker;
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
-
 var EventHandler = _dereq_('../core/EventHandler');
 
 /**
@@ -5562,7 +6059,7 @@ TwoFingerSync.prototype.handleEnd = function handleEnd(event) {
 };
 
 module.exports = TwoFingerSync;
-},{"../core/EventHandler":6}],35:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7}],36:[function(_dereq_,module,exports){
 module.exports = {
   Accumulator: _dereq_('./Accumulator'),
   DesktopEmulationMode: _dereq_('./DesktopEmulationMode'),
@@ -5578,7 +6075,7 @@ module.exports = {
   TwoFingerSync: _dereq_('./TwoFingerSync')
 };
 
-},{"./Accumulator":23,"./DesktopEmulationMode":24,"./FastClick":25,"./GenericSync":26,"./MouseSync":27,"./PinchSync":28,"./RotateSync":29,"./ScaleSync":30,"./ScrollSync":31,"./TouchSync":32,"./TouchTracker":33,"./TwoFingerSync":34}],36:[function(_dereq_,module,exports){
+},{"./Accumulator":24,"./DesktopEmulationMode":25,"./FastClick":26,"./GenericSync":27,"./MouseSync":28,"./PinchSync":29,"./RotateSync":30,"./ScaleSync":31,"./ScrollSync":32,"./TouchSync":33,"./TouchTracker":34,"./TwoFingerSync":35}],37:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -5732,7 +6229,7 @@ Matrix.prototype.clone = function clone() {
 };
 
 module.exports = Matrix;
-},{"./Vector":40}],37:[function(_dereq_,module,exports){
+},{"./Vector":41}],38:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -5959,10 +6456,10 @@ Quaternion.prototype.setWXYZ = function setWXYZ(w,x,y,z) {
  */
 Quaternion.prototype.set = function set(v) {
     if (v instanceof Array) {
-        this.w = v[0];
-        this.x = v[1];
-        this.y = v[2];
-        this.z = v[3];
+        this.w = 0;
+        this.x = v[0];
+        this.y = v[1];
+        this.z = v[2];
     }
     else {
         this.w = v.w;
@@ -6162,7 +6659,7 @@ Quaternion.prototype.slerp = function slerp(q, t) {
 };
 
 module.exports = Quaternion;
-},{"./Matrix":36}],38:[function(_dereq_,module,exports){
+},{"./Matrix":37}],39:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -6264,7 +6761,7 @@ Random.bool = function bool(prob) {
 };
 
 module.exports = Random;
-},{}],39:[function(_dereq_,module,exports){
+},{}],40:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -6312,7 +6809,7 @@ Utilities.length = function length(array) {
 };
 
 module.exports = Utilities;
-},{}],40:[function(_dereq_,module,exports){
+},{}],41:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -6336,7 +6833,7 @@ module.exports = Utilities;
  * @param {number} z z element value
  */
 function Vector(x,y,z) {
-    if (arguments.length === 1) this.set(x);
+    if (arguments.length === 1 && x !== undefined) this.set(x);
     else {
         this.x = x || 0;
         this.y = y || 0;
@@ -6602,9 +7099,9 @@ function _setFromNumber(x) {
  * @return {Vector} this
  */
 Vector.prototype.set = function set(v) {
-    if (v instanceof Array)    return _setFromArray.call(this, v);
-    if (v instanceof Vector)   return _setFromVector.call(this, v);
+    if (v instanceof Array) return _setFromArray.call(this, v);
     if (typeof v === 'number') return _setFromNumber.call(this, v);
+    return _setFromVector.call(this, v);
 };
 
 Vector.prototype.setXYZ = function(x,y,z) {
@@ -6692,7 +7189,7 @@ Vector.prototype.get1D = function() {
 };
 
 module.exports = Vector;
-},{}],41:[function(_dereq_,module,exports){
+},{}],42:[function(_dereq_,module,exports){
 module.exports = {
   Matrix: _dereq_('./Matrix'),
   Quaternion: _dereq_('./Quaternion'),
@@ -6701,7 +7198,7 @@ module.exports = {
   Vector: _dereq_('./Vector')
 };
 
-},{"./Matrix":36,"./Quaternion":37,"./Random":38,"./Utilities":39,"./Vector":40}],42:[function(_dereq_,module,exports){
+},{"./Matrix":37,"./Quaternion":38,"./Random":39,"./Utilities":40,"./Vector":41}],43:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -6959,7 +7456,7 @@ Draggable.prototype.modify = function modify(target) {
 };
 
 module.exports = Draggable;
-},{"../core/EventHandler":6,"../core/Transform":14,"../inputs/GenericSync":26,"../inputs/MouseSync":27,"../inputs/TouchSync":32,"../math/Utilities":39,"../transitions/Transitionable":87}],43:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7,"../core/Transform":15,"../inputs/GenericSync":27,"../inputs/MouseSync":28,"../inputs/TouchSync":33,"../math/Utilities":40,"../transitions/Transitionable":88}],44:[function(_dereq_,module,exports){
 var Transitionable = _dereq_('../transitions/Transitionable');
 var OptionsManager = _dereq_('../core/OptionsManager');
 
@@ -7080,7 +7577,7 @@ Fader.prototype.modify = function modify(target) {
 };
 
 module.exports = Fader;
-},{"../core/OptionsManager":9,"../transitions/Transitionable":87}],44:[function(_dereq_,module,exports){
+},{"../core/OptionsManager":10,"../transitions/Transitionable":88}],45:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -7151,7 +7648,7 @@ ModifierChain.prototype.modify = function modify(input) {
 };
 
 module.exports = ModifierChain;
-},{}],45:[function(_dereq_,module,exports){
+},{}],46:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -7183,6 +7680,7 @@ var TransitionableTransform = _dereq_('../transitions/TransitionableTransform');
  * @param {Array.Number} [options.origin] origin adjustment
  * @param {Array.Number} [options.align] align adjustment
  * @param {Array.Number} [options.size] size to apply to descendants
+ * @param {Array.Number} [options.propportions] proportions to apply to descendants
  */
 function StateModifier(options) {
     this._transformState = new TransitionableTransform(Transform.identity);
@@ -7190,18 +7688,21 @@ function StateModifier(options) {
     this._originState = new Transitionable([0, 0]);
     this._alignState = new Transitionable([0, 0]);
     this._sizeState = new Transitionable([0, 0]);
+    this._proportionsState = new Transitionable([0, 0]);
 
     this._modifier = new Modifier({
         transform: this._transformState,
         opacity: this._opacityState,
         origin: null,
         align: null,
-        size: null
+        size: null,
+        proportions: null
     });
 
     this._hasOrigin = false;
     this._hasAlign = false;
     this._hasSize = false;
+    this._hasProportions = false;
 
     if (options) {
         if (options.transform) this.setTransform(options.transform);
@@ -7209,6 +7710,7 @@ function StateModifier(options) {
         if (options.origin) this.setOrigin(options.origin);
         if (options.align) this.setAlign(options.align);
         if (options.size) this.setSize(options.size);
+        if (options.proportions) this.setProportions(options.proportions);
     }
 }
 
@@ -7219,7 +7721,9 @@ function StateModifier(options) {
  * @method setTransform
  *
  * @param {Transform} transform Transform to transition to.
- * @param {Transitionable} [transition] Valid transitionable object
+ * @param {Transitionable} transition object of type {duration: number, curve:
+ *    f[0,1] -> [0,1] or name}. If transition is omitted, change will be
+ *    instantaneous.
  * @param {Function} [callback] callback to call after transition completes
  * @return {StateModifier} this
  */
@@ -7235,7 +7739,9 @@ StateModifier.prototype.setTransform = function setTransform(transform, transiti
  * @method setOpacity
  *
  * @param {Number} opacity Opacity value to transition to.
- * @param {Transitionable} transition Valid transitionable object
+ * @param {Transitionable} transition object of type {duration: number, curve:
+ *    f[0,1] -> [0,1] or name}. If transition is omitted, change will be
+ *    instantaneous.
  * @param {Function} callback callback to call after transition completes
  * @return {StateModifier} this
  */
@@ -7251,7 +7757,9 @@ StateModifier.prototype.setOpacity = function setOpacity(opacity, transition, ca
  * @method setOrigin
  *
  * @param {Array.Number} origin two element array with values between 0 and 1.
- * @param {Transitionable} transition Valid transitionable object
+ * @param {Transitionable} transition object of type {duration: number, curve:
+ *    f[0,1] -> [0,1] or name}. If transition is omitted, change will be
+ *    instantaneous.
  * @param {Function} callback callback to call after transition completes
  * @return {StateModifier} this
  */
@@ -7278,7 +7786,9 @@ StateModifier.prototype.setOrigin = function setOrigin(origin, transition, callb
  * @method setAlign
  *
  * @param {Array.Number} align two element array with values between 0 and 1.
- * @param {Transitionable} transition Valid transitionable object
+ * @param {Transitionable} transition object of type {duration: number, curve:
+ *    f[0,1] -> [0,1] or name}. If transition is omitted, change will be
+ *    instantaneous.
  * @param {Function} callback callback to call after transition completes
  * @return {StateModifier} this
  */
@@ -7304,8 +7814,10 @@ StateModifier.prototype.setAlign = function setOrigin(align, transition, callbac
  *
  * @method setSize
  *
- * @param {Array.Number} size two element array with values between 0 and 1.
- * @param {Transitionable} transition Valid transitionable object
+ * @param {Array.Number} size two element array of [width, height]
+ * @param {Transitionable} transition object of type {duration: number, curve:
+ *    f[0,1] -> [0,1] or name}. If transition is omitted, change will be
+ *    instantaneous.
  * @param {Function} callback callback to call after transition completes
  * @return {StateModifier} this
  */
@@ -7326,6 +7838,33 @@ StateModifier.prototype.setSize = function setSize(size, transition, callback) {
 };
 
 /**
+ * Set the proportions of this modifier, either statically or
+ *   through a provided Transitionable.
+ *
+ * @method setProportions
+ *
+ * @param {Array.Number} proportions two element array with values between 0 and 1.
+ * @param {Transitionable} transition Valid transitionable object
+ * @param {Function} callback callback to call after transition completes
+ * @return {StateModifier} this
+ */
+StateModifier.prototype.setProportions = function setSize(proportions, transition, callback) {
+    if (proportions === null) {
+        if (this._hasProportions) {
+            this._modifier.proportionsFrom(null);
+            this._hasProportions = false;
+        }
+        return this;
+    }
+    else if (!this._hasProportions) {
+        this._hasProportions = true;
+        this._modifier.proportionsFrom(this._proportionsState);
+    }
+    this._proportionsState.set(proportions, transition, callback);
+    return this;
+};
+
+/**
  * Stop the transition.
  *
  * @method halt
@@ -7336,6 +7875,7 @@ StateModifier.prototype.halt = function halt() {
     this._originState.halt();
     this._alignState.halt();
     this._sizeState.halt();
+    this._proportionsState.halt();
 };
 
 /**
@@ -7399,6 +7939,16 @@ StateModifier.prototype.getSize = function getSize() {
 };
 
 /**
+ * Get the current state of the propportions component.
+ *
+ * @method getProportions
+ * @return {Object} size provider object
+ */
+StateModifier.prototype.getProportions = function getProportions() {
+    return this._hasProportions ? this._proportionsState.get() : null;
+};
+
+/**
  * Return render spec for this StateModifier, applying to the provided
  *    target component.  This is similar to render() for Surfaces.
  *
@@ -7415,7 +7965,7 @@ StateModifier.prototype.modify = function modify(target) {
 };
 
 module.exports = StateModifier;
-},{"../core/Modifier":8,"../core/Transform":14,"../transitions/Transitionable":87,"../transitions/TransitionableTransform":88}],46:[function(_dereq_,module,exports){
+},{"../core/Modifier":9,"../core/Transform":15,"../transitions/Transitionable":88,"../transitions/TransitionableTransform":89}],47:[function(_dereq_,module,exports){
 module.exports = {
   Draggable: _dereq_('./Draggable'),
   Fader: _dereq_('./Fader'),
@@ -7423,7 +7973,7 @@ module.exports = {
   StateModifier: _dereq_('./StateModifier')
 };
 
-},{"./Draggable":42,"./Fader":43,"./ModifierChain":44,"./StateModifier":45}],47:[function(_dereq_,module,exports){
+},{"./Draggable":43,"./Fader":44,"./ModifierChain":45,"./StateModifier":46}],48:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -7434,10 +7984,14 @@ module.exports = {
 var EventHandler = _dereq_('../core/EventHandler');
 
 /**
- * The Physics Engine is responsible for mediating Bodies and their
- * interaction with forces and constraints. The Physics Engine handles the
- * logic of adding and removing bodies, updating their state of the over
- * time.
+ * The Physics Engine is responsible for mediating bodies with their
+ *   interaction with forces and constraints (agents). Specifically, it
+ *   is responsible for:
+ *
+ *   - adding and removing bodies
+ *   - updating a body's state over time
+ *   - attaching and detaching agents
+ *   - sleeping upon equillibrium and waking upon excitation
  *
  * @class PhysicsEngine
  * @constructor
@@ -7449,9 +8003,9 @@ function PhysicsEngine(options) {
 
     this._particles      = [];   //list of managed particles
     this._bodies         = [];   //list of managed bodies
-    this._agents         = {};   //hash of managed agents
-    this._forces         = [];   //list of IDs of agents that are forces
-    this._constraints    = [];   //list of IDs of agents that are constraints
+    this._agentData      = {};   //hash of managed agent data
+    this._forces         = [];   //list of Ids of agents that are forces
+    this._constraints    = [];   //list of Ids of agents that are constraints
 
     this._buffer         = 0.0;
     this._prevTime       = now();
@@ -7459,11 +8013,22 @@ function PhysicsEngine(options) {
     this._eventHandler   = null;
     this._currAgentId    = 0;
     this._hasBodies      = false;
+    this._eventHandler   = null;
 }
 
+/** const */
 var TIMESTEP = 17;
 var MIN_TIME_STEP = 1000 / 120;
 var MAX_TIME_STEP = 17;
+
+var now = Date.now;
+
+// Catalogue of outputted events
+var _events = {
+    start : 'start',
+    update : 'update',
+    end : 'end'
+};
 
 /**
  * @property PhysicsEngine.DEFAULT_OPTIONS
@@ -7481,21 +8046,34 @@ PhysicsEngine.DEFAULT_OPTIONS = {
     constraintSteps : 1,
 
     /**
-     * The energy threshold before the Engine stops updating
+     * The energy threshold required for the Physics Engine to update
      * @attribute sleepTolerance
      * @type Number
      */
-    sleepTolerance  : 1e-7
-};
+    sleepTolerance : 1e-7,
 
-var now = (function() {
-    return Date.now;
-})();
+    /**
+     * The maximum velocity magnitude of a physics body
+     *      Range : [0, Infinity]
+     * @attribute velocityCap
+     * @type Number
+     */
+    velocityCap : undefined,
+
+    /**
+     * The maximum angular velocity magnitude of a physics body
+     *      Range : [0, Infinity]
+     * @attribute angularVelocityCap
+     * @type Number
+     */
+    angularVelocityCap : undefined
+};
 
 /**
  * Options setter
+ *
  * @method setOptions
- * @param options {Object}
+ * @param opts {Object}
  */
 PhysicsEngine.prototype.setOptions = function setOptions(opts) {
     for (var key in opts) if (this.options[key]) this.options[key] = opts[key];
@@ -7503,7 +8081,7 @@ PhysicsEngine.prototype.setOptions = function setOptions(opts) {
 
 /**
  * Method to add a physics body to the engine. Necessary to update the
- * body over time.
+ *   body over time.
  *
  * @method addBody
  * @param body {Body}
@@ -7516,12 +8094,15 @@ PhysicsEngine.prototype.addBody = function addBody(body) {
         this._hasBodies = true;
     }
     else this._particles.push(body);
+    body.on('start', this.wake.bind(this));
     return body;
 };
 
 /**
  * Remove a body from the engine. Detaches body from all forces and
- * constraints.
+ *   constraints.
+ *
+ * TODO: Fix for in loop
  *
  * @method removeBody
  * @param body {Body}
@@ -7530,7 +8111,7 @@ PhysicsEngine.prototype.removeBody = function removeBody(body) {
     var array = (body.isBody) ? this._bodies : this._particles;
     var index = array.indexOf(body);
     if (index > -1) {
-        for (var i = 0; i < Object.keys(this._agents).length; i++) this.detachFrom(i, body);
+        for (var agent in this._agentData) this.detachFrom(agent.id, body);
         array.splice(index,1);
     }
     if (this.getBodies().length === 0) this._hasBodies = false;
@@ -7545,8 +8126,11 @@ function _attachOne(agent, targets, source) {
     if (targets === undefined) targets = this.getParticlesAndBodies();
     if (!(targets instanceof Array)) targets = [targets];
 
-    this._agents[this._currAgentId] = {
+    agent.on('change', this.wake.bind(this));
+
+    this._agentData[this._currAgentId] = {
         agent   : agent,
+        id      : this._currAgentId,
         targets : targets,
         source  : source
     };
@@ -7557,15 +8141,17 @@ function _attachOne(agent, targets, source) {
 
 /**
  * Attaches a force or constraint to a Body. Returns an AgentId of the
- * attached agent which can be used to detach the agent.
+ *   attached agent which can be used to detach the agent.
  *
  * @method attach
- * @param agent {Agent|Array.Agent} A force, constraint, or array of them.
+ * @param agents {Agent|Array.Agent} A force, constraint, or array of them.
  * @param [targets=All] {Body|Array.Body} The Body or Bodies affected by the agent
  * @param [source] {Body} The source of the agent
  * @return AgentId {Number}
  */
 PhysicsEngine.prototype.attach = function attach(agents, targets, source) {
+    this.wake();
+
     if (agents instanceof Array) {
         var agentIDs = [];
         for (var i = 0; i < agents.length; i++)
@@ -7583,15 +8169,15 @@ PhysicsEngine.prototype.attach = function attach(agents, targets, source) {
  * @param target {Body} The Body affected by the agent
  */
 PhysicsEngine.prototype.attachTo = function attachTo(agentID, target) {
-    _getBoundAgent.call(this, agentID).targets.push(target);
+    _getAgentData.call(this, agentID).targets.push(target);
 };
 
 /**
  * Undoes PhysicsEngine.attach. Removes an agent and its associated
- * effect on its affected Bodies.
+ *   effect on its affected Bodies.
  *
  * @method detach
- * @param agentID {AgentId} The agentId of a previously defined agent
+ * @param id {AgentId} The agentId of a previously defined agent
  */
 PhysicsEngine.prototype.detach = function detach(id) {
     // detach from forces/constraints array
@@ -7601,18 +8187,18 @@ PhysicsEngine.prototype.detach = function detach(id) {
     agentArray.splice(index,1);
 
     // detach agents array
-    delete this._agents[id];
+    delete this._agentData[id];
 };
 
 /**
  * Remove a single Body from a previously defined agent.
  *
  * @method detach
- * @param agentID {AgentId} The agentId of a previously defined agent
+ * @param id {AgentId} The agentId of a previously defined agent
  * @param target {Body} The body to remove from the agent
  */
 PhysicsEngine.prototype.detachFrom = function detachFrom(id, target) {
-    var boundAgent = _getBoundAgent.call(this, id);
+    var boundAgent = _getAgentData.call(this, id);
     if (boundAgent.source === target) this.detach(id);
     else {
         var targets = boundAgent.targets;
@@ -7628,14 +8214,14 @@ PhysicsEngine.prototype.detachFrom = function detachFrom(id, target) {
  * @method detachAll
  */
 PhysicsEngine.prototype.detachAll = function detachAll() {
-    this._agents        = {};
+    this._agentData     = {};
     this._forces        = [];
     this._constraints   = [];
     this._currAgentId   = 0;
 };
 
-function _getBoundAgent(id) {
-    return this._agents[id];
+function _getAgentData(id) {
+    return this._agentData[id];
 }
 
 /**
@@ -7645,7 +8231,7 @@ function _getBoundAgent(id) {
  * @param id {AgentId}
  */
 PhysicsEngine.prototype.getAgent = function getAgent(id) {
-    return _getBoundAgent.call(this, id).agent;
+    return _getAgentData.call(this, id).agent;
 };
 
 /**
@@ -7680,7 +8266,7 @@ PhysicsEngine.prototype.getParticlesAndBodies = function getParticlesAndBodies()
 
 /**
  * Iterates over every Particle and applies a function whose first
- * argument is the Particle
+ *   argument is the Particle
  *
  * @method forEachParticle
  * @param fn {Function} Function to iterate over
@@ -7694,7 +8280,7 @@ PhysicsEngine.prototype.forEachParticle = function forEachParticle(fn, dt) {
 
 /**
  * Iterates over every Body that isn't a Particle and applies
- * a function whose first argument is the Body
+ *   a function whose first argument is the Body
  *
  * @method forEachBody
  * @param fn {Function} Function to iterate over
@@ -7709,7 +8295,7 @@ PhysicsEngine.prototype.forEachBody = function forEachBody(fn, dt) {
 
 /**
  * Iterates over every Body and applies a function whose first
- * argument is the Body
+ *   argument is the Body
  *
  * @method forEach
  * @param fn {Function} Function to iterate over
@@ -7721,7 +8307,7 @@ PhysicsEngine.prototype.forEach = function forEach(fn, dt) {
 };
 
 function _updateForce(index) {
-    var boundAgent = _getBoundAgent.call(this, this._forces[index]);
+    var boundAgent = _getAgentData.call(this, this._forces[index]);
     boundAgent.agent.applyForce(boundAgent.targets, boundAgent.source);
 }
 
@@ -7731,7 +8317,7 @@ function _updateForces() {
 }
 
 function _updateConstraint(index, dt) {
-    var boundAgent = this._agents[this._constraints[index]];
+    var boundAgent = this._agentData[this._constraints[index]];
     return boundAgent.agent.applyConstraint(boundAgent.targets, boundAgent.source, dt);
 }
 
@@ -7744,22 +8330,26 @@ function _updateConstraints(dt) {
     }
 }
 
-function _updateVelocities(particle, dt) {
-    particle.integrateVelocity(dt);
+function _updateVelocities(body, dt) {
+    body.integrateVelocity(dt);
+    if (this.options.velocityCap)
+        body.velocity.cap(this.options.velocityCap).put(body.velocity);
 }
 
 function _updateAngularVelocities(body, dt) {
     body.integrateAngularMomentum(dt);
     body.updateAngularVelocity();
+    if (this.options.angularVelocityCap)
+        body.angularVelocity.cap(this.options.angularVelocityCap).put(body.angularVelocity);
 }
 
 function _updateOrientations(body, dt) {
     body.integrateOrientation(dt);
 }
 
-function _updatePositions(particle, dt) {
-    particle.integratePosition(dt);
-    particle.emit('update', particle);
+function _updatePositions(body, dt) {
+    body.integratePosition(dt);
+    body.emit(_events.update, body);
 }
 
 function _integrate(dt) {
@@ -7771,54 +8361,55 @@ function _integrate(dt) {
     this.forEach(_updatePositions, dt);
 }
 
-function _getEnergyParticles() {
+function _getParticlesEnergy() {
     var energy = 0.0;
     var particleEnergy = 0.0;
     this.forEach(function(particle) {
         particleEnergy = particle.getEnergy();
         energy += particleEnergy;
-        if (particleEnergy < particle.sleepTolerance) particle.sleep();
     });
     return energy;
 }
 
-function _getEnergyForces() {
+function _getAgentsEnergy() {
     var energy = 0;
-    for (var index = this._forces.length - 1; index > -1; index--)
-        energy += this._forces[index].getEnergy() || 0.0;
-    return energy;
-}
-
-function _getEnergyConstraints() {
-    var energy = 0;
-    for (var index = this._constraints.length - 1; index > -1; index--)
-        energy += this._constraints[index].getEnergy() || 0.0;
+    for (var id in this._agentData)
+        energy += this.getAgentEnergy(id);
     return energy;
 }
 
 /**
+ * Calculates the potential energy of an agent, like a spring, by its Id
+ *
+ * @method getAgentEnergy
+ * @param agentId {Number} The attached agent Id
+ * @return energy {Number}
+ */
+PhysicsEngine.prototype.getAgentEnergy = function(agentId) {
+    var agentData = _getAgentData.call(this, agentId);
+    return agentData.agent.getEnergy(agentData.targets, agentData.source);
+};
+
+/**
  * Calculates the kinetic energy of all Body objects and potential energy
- * of all attached agents.
+ *   of all attached agents.
  *
  * TODO: implement.
  * @method getEnergy
  * @return energy {Number}
  */
 PhysicsEngine.prototype.getEnergy = function getEnergy() {
-    return _getEnergyParticles.call(this) + _getEnergyForces.call(this) + _getEnergyConstraints.call(this);
+    return _getParticlesEnergy.call(this) + _getAgentsEnergy.call(this);
 };
 
 /**
  * Updates all Body objects managed by the physics engine over the
- * time duration since the last time step was called.
+ *   time duration since the last time step was called.
  *
  * @method step
  */
 PhysicsEngine.prototype.step = function step() {
-//        if (this.getEnergy() < this.options.sleepTolerance) {
-//            this.sleep();
-//            return;
-//        };
+    if (this.isSleeping()) return;
 
     //set current frame's time
     var currTime = now();
@@ -7839,13 +8430,17 @@ PhysicsEngine.prototype.step = function step() {
 //        };
 //        _integrate.call(this, this._buffer);
 //        this._buffer = 0.0;
+
     _integrate.call(this, TIMESTEP);
 
-//        this.emit('update', this);
+    this.emit(_events.update, this);
+
+    if (this.getEnergy() < this.options.sleepTolerance) this.sleep();
 };
 
 /**
  * Tells whether the Physics Engine is sleeping or awake.
+ *
  * @method isSleeping
  * @return {Boolean}
  */
@@ -7854,21 +8449,38 @@ PhysicsEngine.prototype.isSleeping = function isSleeping() {
 };
 
 /**
- * Stops the Physics Engine from updating. Emits an 'end' event.
+ * Tells whether the Physics Engine is sleeping or awake.
+ *
+ * @method isActive
+ * @return {Boolean}
+ */
+PhysicsEngine.prototype.isActive = function isSleeping() {
+    return !this._isSleeping;
+};
+
+/**
+ * Stops the Physics Engine update loop. Emits an 'end' event.
+ *
  * @method sleep
  */
 PhysicsEngine.prototype.sleep = function sleep() {
-    this.emit('end', this);
+    if (this._isSleeping) return;
+    this.forEach(function(body) {
+        body.sleep();
+    });
+    this.emit(_events.end, this);
     this._isSleeping = true;
 };
 
 /**
- * Starts the Physics Engine from updating. Emits an 'start' event.
+ * Restarts the Physics Engine update loop. Emits an 'start' event.
+ *
  * @method wake
  */
 PhysicsEngine.prototype.wake = function wake() {
+    if (!this._isSleeping) return;
     this._prevTime = now();
-    this.emit('start', this);
+    this.emit(_events.start, this);
     this._isSleeping = false;
 };
 
@@ -7883,7 +8495,7 @@ PhysicsEngine.prototype.on = function on(event, fn) {
 };
 
 module.exports = PhysicsEngine;
-},{"../core/EventHandler":6}],48:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7}],49:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -7898,12 +8510,13 @@ var Transform = _dereq_('../../core/Transform');
 var Vector = _dereq_('../../math/Vector');
 var Quaternion = _dereq_('../../math/Quaternion');
 var Matrix = _dereq_('../../math/Matrix');
+var Integrator = _dereq_('../integrators/SymplecticEuler');
 
 /**
  * A unit controlled by the physics engine which extends the zero-dimensional
- * Particle to include geometry. In addition to maintaining the state
- * of a Particle its state includes orientation, angular velocity
- * and angular momentum and responds to torque forces.
+ *   Particle to include geometry. In addition to maintaining the state
+ *   of a Particle its state includes orientation, angular velocity
+ *   and angular momentum and responds to torque forces.
  *
  * @class Body
  * @extends Particle
@@ -7923,21 +8536,16 @@ function Body(options) {
     if (options.angularMomentum) this.angularMomentum.set(options.angularMomentum);
     if (options.torque)          this.torque.set(options.torque);
 
+    this.angularVelocity.w = 0;        //quaternify the angular velocity
     this.setMomentsOfInertia();
 
-    this.angularVelocity.w = 0;        //quaternify the angular velocity
-
-    //registers
+    // registers
     this.pWorld = new Vector();        //placeholder for world space position
 }
 
 Body.DEFAULT_OPTIONS = Particle.DEFAULT_OPTIONS;
-Body.DEFAULT_OPTIONS.orientation = [0,0,0,1];
-Body.DEFAULT_OPTIONS.angularVelocity = [0,0,0];
-
-Body.AXES = Particle.AXES;
-Body.SLEEP_TOLERANCE = Particle.SLEEP_TOLERANCE;
-Body.INTEGRATOR = Particle.INTEGRATOR;
+Body.DEFAULT_OPTIONS.orientation = [0, 0, 0, 1];
+Body.DEFAULT_OPTIONS.angularVelocity = [0, 0, 0];
 
 Body.prototype = Object.create(Particle.prototype);
 Body.prototype.constructor = Body;
@@ -7951,7 +8559,7 @@ Body.prototype.setMass = function setMass() {
 
 /**
  * Setter for moment of inertia, which is necessary to give proper
- * angular inertia depending on the geometry of the body.
+ *   angular inertia depending on the geometry of the body.
  *
  * @method setMomentsOfInertia
  */
@@ -7971,7 +8579,7 @@ Body.prototype.updateAngularVelocity = function updateAngularVelocity() {
 
 /**
  * Determine world coordinates from the local coordinate system. Useful
- * if the Body has rotated in space.
+ *   if the Body has rotated in space.
  *
  * @method toWorldCoordinates
  * @param localPosition {Vector} local coordinate vector
@@ -7994,7 +8602,7 @@ Body.prototype.getEnergy = function getEnergy() {
 
 /**
  * Extends Particle.reset to reset orientation, angular velocity
- * and angular momentum.
+ *   and angular momentum.
  *
  * @method reset
  * @param [p] {Array|Vector} position
@@ -8043,7 +8651,7 @@ Body.prototype.setAngularMomentum = function setAngularMomentum(L) {
 
 /**
  * Extends Particle.applyForce with an optional argument
- * to apply the force at an off-centered location, resulting in a torque.
+ *   to apply the force at an off-centered location, resulting in a torque.
  *
  * @method applyForce
  * @param force {Vector} force
@@ -8067,7 +8675,7 @@ Body.prototype.applyTorque = function applyTorque(torque) {
 
 /**
  * Extends Particle.getTransform to include a rotational component
- * derived from the particle's orientation.
+ *   derived from the particle's orientation.
  *
  * @method getTransform
  * @return transform {Transform}
@@ -8081,7 +8689,7 @@ Body.prototype.getTransform = function getTransform() {
 
 /**
  * Extends Particle._integrate to also update the rotational states
- * of the body.
+ *   of the body.
  *
  * @method getTransform
  * @protected
@@ -8101,7 +8709,7 @@ Body.prototype._integrate = function _integrate(dt) {
  * @param dt {Number} delta time
  */
 Body.prototype.integrateAngularMomentum = function integrateAngularMomentum(dt) {
-    Body.INTEGRATOR.integrateAngularMomentum(this, dt);
+    Integrator.integrateAngularMomentum(this, dt);
 };
 
 /**
@@ -8111,11 +8719,11 @@ Body.prototype.integrateAngularMomentum = function integrateAngularMomentum(dt) 
  * @param dt {Number} delta time
  */
 Body.prototype.integrateOrientation = function integrateOrientation(dt) {
-    Body.INTEGRATOR.integrateOrientation(this, dt);
+    Integrator.integrateOrientation(this, dt);
 };
 
 module.exports = Body;
-},{"../../core/Transform":14,"../../math/Matrix":36,"../../math/Quaternion":37,"../../math/Vector":40,"./Particle":50}],49:[function(_dereq_,module,exports){
+},{"../../core/Transform":15,"../../math/Matrix":37,"../../math/Quaternion":38,"../../math/Vector":41,"../integrators/SymplecticEuler":72,"./Particle":51}],50:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -8129,7 +8737,7 @@ var Body = _dereq_('./Body');
 var Matrix = _dereq_('../../math/Matrix');
 
 /**
- * Implements a circle, or spherical, geometry for an Body with
+ * Implements a circle, or spherical, geometry for a Body with
  * radius.
  *
  * @class Circle
@@ -8174,7 +8782,7 @@ Circle.prototype.setMomentsOfInertia = function setMomentsOfInertia() {
 };
 
 module.exports = Circle;
-},{"../../math/Matrix":36,"./Body":48}],50:[function(_dereq_,module,exports){
+},{"../../math/Matrix":37,"./Body":49}],51:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -8192,111 +8800,93 @@ var Integrator = _dereq_('../integrators/SymplecticEuler');
 /**
  * A point body that is controlled by the Physics Engine. A particle has
  *   position and velocity states that are updated by the Physics Engine.
- *   Ultimately, a particle is a _special type of modifier, and can be added to
- *   the Famous render tree like any other modifier.
+ *   Ultimately, a particle is a special type of modifier, and can be added to
+ *   the Famo.us Scene Graph like any other modifier.
  *
- * @constructor
  * @class Particle
  * @uses EventHandler
- * @uses Modifier
  * @extensionfor Body
- * @param {Options} [options] An object of configurable options.
- * @param {Array} [options.position] The position of the particle.
- * @param {Array} [options.velocity] The velocity of the particle.
- * @param {Number} [options.mass] The mass of the particle.
- * @param {Hexadecimal} [options.axis] The axis a particle can move along. Can be bitwise ORed e.g., Particle.AXES.X, Particle.AXES.X | Particle.AXES.Y
  *
+ * @param [options] {Options}           An object of configurable options.
+ * @param [options.position] {Array}    The position of the particle.
+ * @param [options.velocity] {Array}    The velocity of the particle.
+ * @param [options.mass] {Number}       The mass of the particle.
  */
  function Particle(options) {
     options = options || {};
+    var defaults = Particle.DEFAULT_OPTIONS;
 
     // registers
     this.position = new Vector();
     this.velocity = new Vector();
-    this.force    = new Vector();
+    this.force = new Vector();
 
-    var defaults  = Particle.DEFAULT_OPTIONS;
-
-    // set vectors
-    this.setPosition(options.position || defaults.position);
-    this.setVelocity(options.velocity || defaults.velocity);
-    this.force.set(options.force || [0,0,0]);
+    // state variables
+    this._engine = null;
+    this._isSleeping = true;
+    this._eventOutput = null;
 
     // set scalars
     this.mass = (options.mass !== undefined)
         ? options.mass
         : defaults.mass;
 
-    this.axis = (options.axis !== undefined)
-        ? options.axis
-        : defaults.axis;
-
     this.inverseMass = 1 / this.mass;
 
-    // state variables
-    this._isSleeping     = false;
-    this._engine         = null;
-    this._eventOutput    = null;
-    this._positionGetter = null;
+    // set vectors
+    this.setPosition(options.position || defaults.position);
+    this.setVelocity(options.velocity || defaults.velocity);
+    this.force.set(options.force || [0,0,0]);
 
     this.transform = Transform.identity.slice();
 
     // cached _spec
     this._spec = {
-        transform : this.transform,
-        target    : null
+        size : [true, true],
+        target : {
+            transform : this.transform,
+            origin : [0.5, 0.5],
+            target : null
+        }
     };
 }
 
 Particle.DEFAULT_OPTIONS = {
-    position : [0,0,0],
-    velocity : [0,0,0],
-    mass : 1,
-    axis : undefined
+    position : [0, 0, 0],
+    velocity : [0, 0, 0],
+    mass : 1
 };
-
-/**
- * Kinetic energy threshold needed to update the body
- *
- * @property SLEEP_TOLERANCE
- * @type Number
- * @static
- * @default 1e-7
- */
-Particle.SLEEP_TOLERANCE = 1e-7;
-
-/**
- * Axes by which a body can translate
- *
- * @property AXES
- * @type Hexadecimal
- * @static
- * @default 1e-7
- */
-Particle.AXES = {
-    X : 0x00, // hexadecimal for 0
-    Y : 0x01, // hexadecimal for 1
-    Z : 0x02  // hexadecimal for 2
-};
-
-// Integrator for updating the particle's state
-// TODO: make this a singleton
-Particle.INTEGRATOR = new Integrator();
 
 //Catalogue of outputted events
 var _events = {
-    start  : 'start',
+    start : 'start',
     update : 'update',
-    end    : 'end'
+    end : 'end'
 };
 
 // Cached timing function
-var now = (function() {
-    return Date.now;
-})();
+var now = Date.now;
+
+/**
+ * @attribute isBody
+ * @type Boolean
+ * @static
+ */
+Particle.prototype.isBody = false;
+
+/**
+ * Determines if particle is active
+ *
+ * @method isActive
+ * @return {Boolean}
+ */
+Particle.prototype.isActive = function isActive() {
+    return !this._isSleeping;
+};
 
 /**
  * Stops the particle from updating
+ *
  * @method sleep
  */
 Particle.prototype.sleep = function sleep() {
@@ -8307,6 +8897,7 @@ Particle.prototype.sleep = function sleep() {
 
 /**
  * Starts the particle update
+ *
  * @method wake
  */
 Particle.prototype.wake = function wake() {
@@ -8314,18 +8905,13 @@ Particle.prototype.wake = function wake() {
     this.emit(_events.start, this);
     this._isSleeping = false;
     this._prevTime = now();
+    if (this._engine) this._engine.wake();
 };
 
 /**
- * @attribute isBody
- * @type Boolean
- * @static
- */
-Particle.prototype.isBody = false;
-
-/**
  * Basic setter for position
- * @method getPosition
+ *
+ * @method setPosition
  * @param position {Array|Vector}
  */
 Particle.prototype.setPosition = function setPosition(position) {
@@ -8334,8 +8920,9 @@ Particle.prototype.setPosition = function setPosition(position) {
 
 /**
  * 1-dimensional setter for position
+ *
  * @method setPosition1D
- * @param value {Number}
+ * @param x {Number}
  */
 Particle.prototype.setPosition1D = function setPosition1D(x) {
     this.position.x = x;
@@ -8343,20 +8930,18 @@ Particle.prototype.setPosition1D = function setPosition1D(x) {
 
 /**
  * Basic getter function for position
+ *
  * @method getPosition
  * @return position {Array}
  */
 Particle.prototype.getPosition = function getPosition() {
-    if (this._positionGetter instanceof Function)
-        this.setPosition(this._positionGetter());
-
     this._engine.step();
-
     return this.position.get();
 };
 
 /**
  * 1-dimensional getter for position
+ *
  * @method getPosition1D
  * @return value {Number}
  */
@@ -8366,36 +8951,31 @@ Particle.prototype.getPosition1D = function getPosition1D() {
 };
 
 /**
- * Defines the position from outside the Physics Engine
- * @method positionFrom
- * @param positionGetter {Function}
- */
-Particle.prototype.positionFrom = function positionFrom(positionGetter) {
-    this._positionGetter = positionGetter;
-};
-
-/**
  * Basic setter function for velocity Vector
+ *
  * @method setVelocity
  * @function
  */
 Particle.prototype.setVelocity = function setVelocity(velocity) {
     this.velocity.set(velocity);
-    this.wake();
+    if (!(velocity[0] === 0 && velocity[1] === 0 && velocity[2] === 0))
+        this.wake();
 };
 
 /**
  * 1-dimensional setter for velocity
+ *
  * @method setVelocity1D
- * @param velocity {Number}
+ * @param x {Number}
  */
 Particle.prototype.setVelocity1D = function setVelocity1D(x) {
     this.velocity.x = x;
-    this.wake();
+    if (x !== 0) this.wake();
 };
 
 /**
  * Basic getter function for velocity Vector
+ *
  * @method getVelocity
  * @return velocity {Array}
  */
@@ -8404,7 +8984,19 @@ Particle.prototype.getVelocity = function getVelocity() {
 };
 
 /**
+ * Basic setter function for force Vector
+ *
+ * @method setForce
+ * @return force {Array}
+ */
+Particle.prototype.setForce = function setForce(force) {
+    this.force.set(force);
+    this.wake();
+};
+
+/**
  * 1-dimensional getter for velocity
+ *
  * @method getVelocity1D
  * @return velocity {Number}
  */
@@ -8414,6 +9006,7 @@ Particle.prototype.getVelocity1D = function getVelocity1D() {
 
 /**
  * Basic setter function for mass quantity
+ *
  * @method setMass
  * @param mass {Number} mass
  */
@@ -8424,6 +9017,7 @@ Particle.prototype.setMass = function setMass(mass) {
 
 /**
  * Basic getter function for mass quantity
+ *
  * @method getMass
  * @return mass {Number}
  */
@@ -8433,6 +9027,7 @@ Particle.prototype.getMass = function getMass() {
 
 /**
  * Reset position and velocity
+ *
  * @method reset
  * @param position {Array|Vector}
  * @param velocity {Array|Vector}
@@ -8444,6 +9039,7 @@ Particle.prototype.reset = function reset(position, velocity) {
 
 /**
  * Add force vector to existing internal force Vector
+ *
  * @method applyForce
  * @param force {Vector}
  */
@@ -8455,6 +9051,7 @@ Particle.prototype.applyForce = function applyForce(force) {
 
 /**
  * Add impulse (change in velocity) Vector to this Vector's velocity.
+ *
  * @method applyImpulse
  * @param impulse {Vector}
  */
@@ -8466,24 +9063,27 @@ Particle.prototype.applyImpulse = function applyImpulse(impulse) {
 
 /**
  * Update a particle's velocity from its force accumulator
+ *
  * @method integrateVelocity
  * @param dt {Number} Time differential
  */
 Particle.prototype.integrateVelocity = function integrateVelocity(dt) {
-    Particle.INTEGRATOR.integrateVelocity(this, dt);
+    Integrator.integrateVelocity(this, dt);
 };
 
 /**
  * Update a particle's position from its velocity
+ *
  * @method integratePosition
  * @param dt {Number} Time differential
  */
 Particle.prototype.integratePosition = function integratePosition(dt) {
-    Particle.INTEGRATOR.integratePosition(this, dt);
+    Integrator.integratePosition(this, dt);
 };
 
 /**
  * Update the position and velocity of the particle
+ *
  * @method _integrate
  * @protected
  * @param dt {Number} Time differential
@@ -8495,6 +9095,7 @@ Particle.prototype._integrate = function _integrate(dt) {
 
 /**
  * Get kinetic energy of the particle.
+ *
  * @method getEnergy
  * @function
  */
@@ -8504,6 +9105,7 @@ Particle.prototype.getEnergy = function getEnergy() {
 
 /**
  * Generate transform from the current position state
+ *
  * @method getTransform
  * @return Transform {Transform}
  */
@@ -8511,46 +9113,32 @@ Particle.prototype.getTransform = function getTransform() {
     this._engine.step();
 
     var position = this.position;
-    var axis = this.axis;
     var transform = this.transform;
-
-    if (axis !== undefined) {
-        if (axis & ~Particle.AXES.X) {
-            position.x = 0;
-        }
-        if (axis & ~Particle.AXES.Y) {
-            position.y = 0;
-        }
-        if (axis & ~Particle.AXES.Z) {
-            position.z = 0;
-        }
-    }
 
     transform[12] = position.x;
     transform[13] = position.y;
     transform[14] = position.z;
-
     return transform;
 };
 
 /**
  * The modify interface of a Modifier
+ *
  * @method modify
  * @param target {Spec}
  * @return Spec {Spec}
  */
 Particle.prototype.modify = function modify(target) {
-    var _spec = this._spec;
+    var _spec = this._spec.target;
     _spec.transform = this.getTransform();
     _spec.target = target;
-    return _spec;
+    return this._spec;
 };
 
 // private
 function _createEventOutput() {
     this._eventOutput = new EventHandler();
     this._eventOutput.bindThis(this);
-    //overrides on/removeListener/pipe/unpipe methods
     EventHandler.setOutputHandler(this, this._eventOutput);
 }
 
@@ -8563,21 +9151,24 @@ Particle.prototype.on = function on() {
     _createEventOutput.call(this);
     return this.on.apply(this, arguments);
 };
+
 Particle.prototype.removeListener = function removeListener() {
     _createEventOutput.call(this);
     return this.removeListener.apply(this, arguments);
 };
+
 Particle.prototype.pipe = function pipe() {
     _createEventOutput.call(this);
     return this.pipe.apply(this, arguments);
 };
+
 Particle.prototype.unpipe = function unpipe() {
     _createEventOutput.call(this);
     return this.unpipe.apply(this, arguments);
 };
 
 module.exports = Particle;
-},{"../../core/EventHandler":6,"../../core/Transform":14,"../../math/Vector":40,"../integrators/SymplecticEuler":71}],51:[function(_dereq_,module,exports){
+},{"../../core/EventHandler":7,"../../core/Transform":15,"../../math/Vector":41,"../integrators/SymplecticEuler":72}],52:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -8636,7 +9227,7 @@ Rectangle.prototype.setMomentsOfInertia = function setMomentsOfInertia() {
 };
 
 module.exports = Rectangle;
-},{"../../math/Matrix":36,"./Body":48}],52:[function(_dereq_,module,exports){
+},{"../../math/Matrix":37,"./Body":49}],53:[function(_dereq_,module,exports){
 module.exports = {
   Body: _dereq_('./Body'),
   Circle: _dereq_('./Circle'),
@@ -8644,7 +9235,7 @@ module.exports = {
   Rectangle: _dereq_('./Rectangle')
 };
 
-},{"./Body":48,"./Circle":49,"./Particle":50,"./Rectangle":51}],53:[function(_dereq_,module,exports){
+},{"./Body":49,"./Circle":50,"./Particle":51,"./Rectangle":52}],54:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -8787,7 +9378,7 @@ Collision.prototype.applyConstraint = function applyConstraint(targets, source, 
 };
 
 module.exports = Collision;
-},{"../../math/Vector":40,"./Constraint":54}],54:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Constraint":55}],55:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -8809,8 +9400,8 @@ var EventHandler = _dereq_('../../core/EventHandler');
  */
 function Constraint() {
     this.options = this.options || {};
-    this._energy = 0.0;
-    this._eventOutput = null;
+    this._eventOutput = new EventHandler();
+    EventHandler.setOutputHandler(this, this._eventOutput);
 }
 
 /*
@@ -8820,7 +9411,7 @@ function Constraint() {
  * @param options {Objects}
  */
 Constraint.prototype.setOptions = function setOptions(options) {
-    for (var key in options) this.options[key] = options[key];
+    this._eventOutput.emit('change', options);
 };
 
 /**
@@ -8837,46 +9428,11 @@ Constraint.prototype.applyConstraint = function applyConstraint() {};
  * @return energy {Number}
  */
 Constraint.prototype.getEnergy = function getEnergy() {
-    return this._energy;
-};
-
-/**
- * Setter for energy
- *
- * @method setEnergy
- * @param energy {Number}
- */
-Constraint.prototype.setEnergy = function setEnergy(energy) {
-    this._energy = energy;
-};
-
-function _createEventOutput() {
-    this._eventOutput = new EventHandler();
-    this._eventOutput.bindThis(this);
-    EventHandler.setOutputHandler(this, this._eventOutput);
-}
-
-Constraint.prototype.on = function on() {
-    _createEventOutput.call(this);
-    return this.on.apply(this, arguments);
-};
-Constraint.prototype.addListener = function addListener() {
-    _createEventOutput.call(this);
-    return this.addListener.apply(this, arguments);
-};
-Constraint.prototype.pipe = function pipe() {
-    _createEventOutput.call(this);
-    return this.pipe.apply(this, arguments);
-};
-Constraint.prototype.removeListener = function removeListener() {
-    return this.removeListener.apply(this, arguments);
-};
-Constraint.prototype.unpipe = function unpipe() {
-    return this.unpipe.apply(this, arguments);
+    return 0.0;
 };
 
 module.exports = Constraint;
-},{"../../core/EventHandler":6}],55:[function(_dereq_,module,exports){
+},{"../../core/EventHandler":7}],56:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -9008,7 +9564,7 @@ Curve.prototype.applyConstraint = function applyConstraint(targets, source, dt) 
 };
 
 module.exports = Curve;
-},{"../../math/Vector":40,"./Constraint":54}],56:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Constraint":55}],57:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -9175,7 +9731,7 @@ Distance.prototype.applyConstraint = function applyConstraint(targets, source, d
 };
 
 module.exports = Distance;
-},{"../../math/Vector":40,"./Constraint":54}],57:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Constraint":55}],58:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -9206,6 +9762,8 @@ var Vector = _dereq_('../../math/Vector');
  *
  */
 function Snap(options) {
+    Constraint.call(this);
+
     this.options = Object.create(this.constructor.DEFAULT_OPTIONS);
     if (options) this.setOptions(options);
 
@@ -9214,25 +9772,19 @@ function Snap(options) {
     this.vDiff  = new Vector();
     this.impulse1 = new Vector();
     this.impulse2 = new Vector();
-
-    Constraint.call(this);
 }
 
 Snap.prototype = Object.create(Constraint.prototype);
 Snap.prototype.constructor = Snap;
 
 Snap.DEFAULT_OPTIONS = {
-    period        : 300,
+    period : 300,
     dampingRatio : 0.1,
     length : 0,
     anchor : undefined
 };
 
 /** const */ var pi = Math.PI;
-
-function _calcEnergy(impulse, disp, dt) {
-    return Math.abs(impulse.dot(disp)/dt);
-}
 
 /**
  * Basic options setter
@@ -9249,37 +9801,30 @@ Snap.prototype.setOptions = function setOptions(options) {
     if (options.length !== undefined) this.options.length = options.length;
     if (options.dampingRatio !== undefined) this.options.dampingRatio = options.dampingRatio;
     if (options.period !== undefined) this.options.period = options.period;
-};
-
-/**
- * Set the anchor position
- *
- * @method setOptions
- * @param {Array} v TODO
- */
-
-Snap.prototype.setAnchor = function setAnchor(v) {
-    if (this.options.anchor !== undefined) this.options.anchor = new Vector();
-    this.options.anchor.set(v);
+    Constraint.prototype.setOptions.call(this, options);
 };
 
 /**
  * Calculates energy of spring
  *
  * @method getEnergy
- * @param {Object} target TODO
- * @param {Object} source TODO
+ * @param targets {Body} target physics body
+ * @param source {Body} source physics body
  * @return energy {Number}
  */
-Snap.prototype.getEnergy = function getEnergy(target, source) {
+Snap.prototype.getEnergy = function getEnergy(targets, source) {
     var options     = this.options;
     var restLength  = options.length;
     var anchor      = options.anchor || source.position;
     var strength    = Math.pow(2 * pi / options.period, 2);
 
-    var dist = anchor.sub(target.position).norm() - restLength;
-
-    return 0.5 * strength * dist * dist;
+    var energy = 0.0;
+    for (var i = 0; i < targets.length; i++){
+        var target = targets[i];
+        var dist = anchor.sub(target.position).norm() - restLength;
+        energy += 0.5 * strength * dist * dist;
+    }
+    return energy;
 };
 
 /**
@@ -9291,7 +9836,7 @@ Snap.prototype.getEnergy = function getEnergy(target, source) {
  * @param dt {Number}           Delta time
  */
 Snap.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
-    var options         = this.options;
+    var options      = this.options;
     var pDiff        = this.pDiff;
     var vDiff        = this.vDiff;
     var impulse1     = this.impulse1;
@@ -9317,7 +9862,7 @@ Snap.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
             var w2 = source.inverseMass;
             var v2 = source.velocity;
             vDiff.set(v1.sub(v2));
-            effMass = 1/(w1 + w2);
+            effMass = 1 / (w1 + w2);
         }
         else {
             vDiff.set(v1);
@@ -9356,13 +9901,11 @@ Snap.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
             impulse1.mult(-1).put(impulse2);
             source.applyImpulse(impulse2);
         }
-
-        this.setEnergy(_calcEnergy(impulse1, pDiff, dt));
     }
 };
 
 module.exports = Snap;
-},{"../../math/Vector":40,"./Constraint":54}],58:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Constraint":55}],59:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -9477,7 +10020,7 @@ Surface.prototype.applyConstraint = function applyConstraint(targets, source, dt
 };
 
 module.exports = Surface;
-},{"../../math/Vector":40,"./Constraint":54}],59:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Constraint":55}],60:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -9664,7 +10207,7 @@ Wall.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
 };
 
 module.exports = Wall;
-},{"../../math/Vector":40,"./Constraint":54}],60:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Constraint":55}],61:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -9902,7 +10445,7 @@ Walls.prototype.rotateY = function rotateY(angle) {
 };
 
 module.exports = Walls;
-},{"../../math/Vector":40,"./Constraint":54,"./Wall":59}],61:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Constraint":55,"./Wall":60}],62:[function(_dereq_,module,exports){
 module.exports = {
   Collision: _dereq_('./Collision'),
   Constraint: _dereq_('./Constraint'),
@@ -9914,7 +10457,7 @@ module.exports = {
   Walls: _dereq_('./Walls')
 };
 
-},{"./Collision":53,"./Constraint":54,"./Curve":55,"./Distance":56,"./Snap":57,"./Surface":58,"./Wall":59,"./Walls":60}],62:[function(_dereq_,module,exports){
+},{"./Collision":54,"./Constraint":55,"./Curve":56,"./Distance":57,"./Snap":58,"./Surface":59,"./Wall":60,"./Walls":61}],63:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -10011,8 +10554,11 @@ Drag.prototype.applyForce = function applyForce(targets) {
     var strength        = this.options.strength;
     var forceFunction   = this.options.forceFunction;
     var force           = this.force;
-    for (var index = 0; index < targets.length; index++) {
-        var particle = targets[index];
+    var index;
+    var particle;
+
+    for (index = 0; index < targets.length; index++) {
+        particle = targets[index];
         forceFunction(particle.velocity).mult(-strength).put(force);
         particle.applyForce(force);
     }
@@ -10029,7 +10575,7 @@ Drag.prototype.setOptions = function setOptions(options) {
 };
 
 module.exports = Drag;
-},{"./Force":63}],63:[function(_dereq_,module,exports){
+},{"./Force":64}],64:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -10051,8 +10597,8 @@ var EventHandler = _dereq_('../../core/EventHandler');
  */
 function Force(force) {
     this.force = new Vector(force);
-    this._energy = 0.0;
-    this._eventOutput = null;
+    this._eventOutput = new EventHandler();
+    EventHandler.setOutputHandler(this, this._eventOutput);
 }
 
 /**
@@ -10062,17 +10608,20 @@ function Force(force) {
  * @param options {Objects}
  */
 Force.prototype.setOptions = function setOptions(options) {
-    for (var key in options) this.options[key] = options[key];
+    this._eventOutput.emit('change', options);
 };
 
 /**
  * Adds a force to a physics body's force accumulator.
  *
  * @method applyForce
- * @param body {Body}
+ * @param targets {Array.Body} Array of bodies to apply a force to.
  */
-Force.prototype.applyForce = function applyForce(body) {
-    body.applyForce(this.force);
+Force.prototype.applyForce = function applyForce(targets) {
+    var length = targets.length;
+    while (length--) {
+        targets[length].applyForce(this.force);
+    }
 };
 
 /**
@@ -10082,46 +10631,11 @@ Force.prototype.applyForce = function applyForce(body) {
  * @return energy {Number}
  */
 Force.prototype.getEnergy = function getEnergy() {
-    return this._energy;
-};
-
-/*
- * Setter for a force's potential energy.
- *
- * @method setEnergy
- * @param energy {Number}
- */
-Force.prototype.setEnergy = function setEnergy(energy) {
-    this._energy = energy;
-};
-
-function _createEventOutput() {
-    this._eventOutput = new EventHandler();
-    this._eventOutput.bindThis(this);
-    EventHandler.setOutputHandler(this, this._eventOutput);
-}
-
-Force.prototype.on = function on() {
-    _createEventOutput.call(this);
-    return this.on.apply(this, arguments);
-};
-Force.prototype.addListener = function addListener() {
-    _createEventOutput.call(this);
-    return this.addListener.apply(this, arguments);
-};
-Force.prototype.pipe = function pipe() {
-    _createEventOutput.call(this);
-    return this.pipe.apply(this, arguments);
-};
-Force.prototype.removeListener = function removeListener() {
-    return this.removeListener.apply(this, arguments);
-};
-Force.prototype.unpipe = function unpipe() {
-    return this.unpipe.apply(this, arguments);
+    return 0.0;
 };
 
 module.exports = Force;
-},{"../../core/EventHandler":6,"../../math/Vector":40}],64:[function(_dereq_,module,exports){
+},{"../../core/EventHandler":7,"../../math/Vector":41}],65:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -10131,7 +10645,6 @@ module.exports = Force;
  * @copyright Famous Industries, Inc. 2014
  */
 
-//TODO: test options manager
 var Force = _dereq_('./Force');
 var Vector = _dereq_('../../math/Vector');
 
@@ -10201,7 +10714,7 @@ Repulsion.DECAY_FUNCTIONS = {
 
     /**
      * An inverse squared distance decay function
-     * @attribute INVERSE
+     * @attribute GRAVITY
      * @type Function
      * @param {Number} r distance from the source body
      * @param {Number} cutoff a distance shift to avoid singularities
@@ -10290,7 +10803,7 @@ Repulsion.prototype.setOptions = function setOptions(options) {
  * Adds a drag force to a physics body's force accumulator.
  *
  * @method applyForce
- * @param targets {Array.Body}  Array of bodies to apply force to
+ * @param targets {Array.Body}  Array of bodies to apply force to.
  * @param source {Body}         The source of the force
  */
 Repulsion.prototype.applyForce = function applyForce(targets, source) {
@@ -10308,16 +10821,22 @@ Repulsion.prototype.applyForce = function applyForce(targets, source) {
 
     if (strength === 0) return;
 
-    for (var index in targets) {
-        var particle = targets[index];
+    var length = targets.length;
+    var particle;
+    var m1;
+    var p1;
+    var r;
+
+    while (length--) {
+        particle = targets[length];
 
         if (particle === source) continue;
 
-        var m1 = particle.mass;
-        var p1 = particle.position;
+        m1 = particle.mass;
+        p1 = particle.position;
 
         disp.set(p1.sub(anchor));
-        var r = disp.norm();
+        r = disp.norm();
 
         if (r < rMax && r > rMin) {
             force.set(disp.normalize(strength * m1 * decayFn(r, cutoff)).cap(cap));
@@ -10328,7 +10847,7 @@ Repulsion.prototype.applyForce = function applyForce(targets, source) {
 };
 
 module.exports = Repulsion;
-},{"../../math/Vector":40,"./Force":63}],65:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Force":64}],66:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -10402,8 +10921,12 @@ RotationalDrag.prototype.applyForce = function applyForce(targets) {
     var force          = this.force;
 
     //TODO: rotational drag as function of inertia
-    for (var index = 0; index < targets.length; index++) {
-        var particle = targets[index];
+
+    var index;
+    var particle;
+
+    for (index = 0; index < targets.length; index++) {
+        particle = targets[index];
         forceFunction(particle.angularVelocity).mult(-100*strength).put(force);
         particle.applyTorque(force);
     }
@@ -10420,7 +10943,7 @@ RotationalDrag.prototype.setOptions = function setOptions(options) {
 };
 
 module.exports = RotationalDrag;
-},{"./Drag":62}],66:[function(_dereq_,module,exports){
+},{"./Drag":63}],67:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -10431,7 +10954,9 @@ module.exports = RotationalDrag;
  */
 
 //TODO: test inheritance
+var Force = _dereq_('./Force');
 var Spring = _dereq_('./Spring');
+var Quaternion = _dereq_('../../math/Quaternion');
 
 /**
  *  A force that rotates a physics body back to target Euler angles.
@@ -10454,6 +10979,46 @@ RotationalSpring.prototype.constructor = RotationalSpring;
 RotationalSpring.DEFAULT_OPTIONS = Spring.DEFAULT_OPTIONS;
 RotationalSpring.FORCE_FUNCTIONS = Spring.FORCE_FUNCTIONS;
 
+/** @const */
+var pi = Math.PI;
+
+function _calcStiffness() {
+    var options = this.options;
+    options.stiffness = Math.pow(2 * pi / options.period, 2);
+}
+
+function _calcDamping() {
+    var options = this.options;
+    options.damping = 4 * pi * options.dampingRatio / options.period;
+}
+
+function _init() {
+    _calcStiffness.call(this);
+    _calcDamping.call(this);
+}
+
+RotationalSpring.prototype.setOptions = function setOptions(options) {
+    // TODO fix no-console error
+    /* eslint no-console: 0 */
+
+    if (options.anchor !== undefined) {
+        if (options.anchor instanceof Quaternion) this.options.anchor = options.anchor;
+        if (options.anchor  instanceof Array) this.options.anchor = new Quaternion(options.anchor);
+    }
+
+    if (options.period !== undefined){
+        this.options.period = options.period;
+    }
+
+    if (options.dampingRatio !== undefined) this.options.dampingRatio = options.dampingRatio;
+    if (options.length !== undefined) this.options.length = options.length;
+    if (options.forceFunction !== undefined) this.options.forceFunction = options.forceFunction;
+    if (options.maxLength !== undefined) this.options.maxLength = options.maxLength;
+
+    _init.call(this);
+    Force.prototype.setOptions.call(this, options);
+};
+
 /**
  * Adds a torque force to a physics body's torque accumulator.
  *
@@ -10461,31 +11026,38 @@ RotationalSpring.FORCE_FUNCTIONS = Spring.FORCE_FUNCTIONS;
  * @param targets {Array.Body} Array of bodies to apply torque to.
  */
 RotationalSpring.prototype.applyForce = function applyForce(targets) {
-    var force        = this.force;
-    var options      = this.options;
-    var disp         = this.disp;
+    var force = this.force;
+    var options = this.options;
+    var disp = this.disp;
 
-    var stiffness    = options.stiffness;
-    var damping      = options.damping;
-    var restLength   = options.length;
-    var anchor       = options.anchor;
+    var stiffness = options.stiffness;
+    var damping = options.damping;
+    var restLength = options.length;
+    var anchor = options.anchor;
+    var forceFunction = options.forceFunction;
+    var maxLength = options.maxLength;
 
-    for (var i = 0; i < targets.length; i++) {
-        var target = targets[i];
+    var i;
+    var target;
+    var dist;
+    var m;
+
+    for (i = 0; i < targets.length; i++) {
+        target = targets[i];
 
         disp.set(anchor.sub(target.orientation));
-        var dist = disp.norm() - restLength;
+        dist = disp.norm() - restLength;
 
         if (dist === 0) return;
 
         //if dampingRatio specified, then override strength and damping
-        var m      = target.mass;
+        m      = target.mass;
         stiffness *= m;
         damping   *= m;
 
-        force.set(disp.normalize(stiffness * this.forceFunction(dist, this.options.lMax)));
+        force.set(disp.normalize(stiffness * forceFunction(dist, maxLength)));
 
-        if (damping) force.set(force.add(target.angularVelocity.mult(-damping)));
+        if (damping) force.add(target.angularVelocity.mult(-damping)).put(force);
 
         target.applyTorque(force);
     }
@@ -10495,20 +11067,25 @@ RotationalSpring.prototype.applyForce = function applyForce(targets) {
  * Calculates the potential energy of the rotational spring.
  *
  * @method getEnergy
- * @param {Body} target The physics body attached to the spring
+ * @param [targets] target The physics body attached to the spring
  */
-RotationalSpring.prototype.getEnergy = function getEnergy(target) {
+RotationalSpring.prototype.getEnergy = function getEnergy(targets) {
     var options     = this.options;
     var restLength  = options.length;
     var anchor      = options.anchor;
     var strength    = options.stiffness;
 
-    var dist = anchor.sub(target.orientation).norm() - restLength;
-    return 0.5 * strength * dist * dist;
+    var energy = 0.0;
+    for (var i = 0; i < targets.length; i++) {
+        var target = targets[i];
+        var dist = anchor.sub(target.orientation).norm() - restLength;
+        energy += 0.5 * strength * dist * dist;
+    }
+    return energy;
 };
 
 module.exports = RotationalSpring;
-},{"./Spring":67}],67:[function(_dereq_,module,exports){
+},{"../../math/Quaternion":38,"./Force":64,"./Spring":68}],68:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -10517,6 +11094,8 @@ module.exports = RotationalSpring;
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
+
+/*global console */
 
 var Force = _dereq_('./Force');
 var Vector = _dereq_('../../math/Vector');
@@ -10531,6 +11110,8 @@ var Vector = _dereq_('../../math/Vector');
  *  @param {Object} options options to set on drag
  */
 function Spring(options) {
+    Force.call(this);
+
     this.options = Object.create(this.constructor.DEFAULT_OPTIONS);
     if (options) this.setOptions(options);
 
@@ -10538,13 +11119,14 @@ function Spring(options) {
     this.disp = new Vector(0,0,0);
 
     _init.call(this);
-    Force.call(this);
 }
 
 Spring.prototype = Object.create(Force.prototype);
 Spring.prototype.constructor = Spring;
 
-/** @const */ var pi = Math.PI;
+/** @const */
+var pi = Math.PI;
+var MIN_PERIOD = 150;
 
 /**
  * @property Spring.FORCE_FUNCTIONS
@@ -10571,7 +11153,7 @@ Spring.FORCE_FUNCTIONS = {
 
     /**
      * A Hookean spring force, linear in the displacement
-     *      see: http://en.wikipedia.org/wiki/FENE
+     *      see: http://en.wikipedia.org/wiki/Hooke's_law
      * @attribute FENE
      * @type Function
      * @param {Number} dist current distance target is from source body
@@ -10598,7 +11180,7 @@ Spring.DEFAULT_OPTIONS = {
      * @type Number
      * @default 300
      */
-    period        : 300,
+    period : 300,
 
     /**
      * The damping of the spring.
@@ -10646,10 +11228,6 @@ Spring.DEFAULT_OPTIONS = {
     forceFunction : Spring.FORCE_FUNCTIONS.HOOK
 };
 
-function _setForceFunction(fn) {
-    this.forceFunction = fn;
-}
-
 function _calcStiffness() {
     var options = this.options;
     options.stiffness = Math.pow(2 * pi / options.period, 2);
@@ -10660,12 +11238,7 @@ function _calcDamping() {
     options.damping = 4 * pi * options.dampingRatio / options.period;
 }
 
-function _calcEnergy(strength, dist) {
-    return 0.5 * strength * dist * dist;
-}
-
 function _init() {
-    _setForceFunction.call(this, this.options.forceFunction);
     _calcStiffness.call(this);
     _calcDamping.call(this);
 }
@@ -10674,21 +11247,33 @@ function _init() {
  * Basic options setter
  *
  * @method setOptions
- * @param options {Objects}
+ * @param options {Object}
  */
 Spring.prototype.setOptions = function setOptions(options) {
+    // TODO fix no-console error
+    /* eslint no-console: 0 */
+
     if (options.anchor !== undefined) {
         if (options.anchor.position instanceof Vector) this.options.anchor = options.anchor.position;
-        if (options.anchor   instanceof Vector)  this.options.anchor = options.anchor;
-        if (options.anchor   instanceof Array)  this.options.anchor = new Vector(options.anchor);
+        if (options.anchor instanceof Vector) this.options.anchor = options.anchor;
+        if (options.anchor instanceof Array)  this.options.anchor = new Vector(options.anchor);
     }
-    if (options.period !== undefined) this.options.period = options.period;
+
+    if (options.period !== undefined){
+        if (options.period < MIN_PERIOD) {
+            options.period = MIN_PERIOD;
+            console.warn('The period of a SpringTransition is capped at ' + MIN_PERIOD + ' ms. Use a SnapTransition for faster transitions');
+        }
+        this.options.period = options.period;
+    }
+
     if (options.dampingRatio !== undefined) this.options.dampingRatio = options.dampingRatio;
     if (options.length !== undefined) this.options.length = options.length;
     if (options.forceFunction !== undefined) this.options.forceFunction = options.forceFunction;
     if (options.maxLength !== undefined) this.options.maxLength = options.maxLength;
 
     _init.call(this);
+    Force.prototype.setOptions.call(this, options);
 };
 
 /**
@@ -10698,32 +11283,40 @@ Spring.prototype.setOptions = function setOptions(options) {
  * @param targets {Array.Body} Array of bodies to apply force to.
  */
 Spring.prototype.applyForce = function applyForce(targets, source) {
-    var force        = this.force;
-    var disp         = this.disp;
-    var options      = this.options;
+    var force = this.force;
+    var disp = this.disp;
+    var options = this.options;
 
-    var stiffness    = options.stiffness;
-    var damping      = options.damping;
-    var restLength   = options.length;
-    var lMax         = options.maxLength;
-    var anchor       = options.anchor || source.position;
+    var stiffness = options.stiffness;
+    var damping = options.damping;
+    var restLength = options.length;
+    var maxLength = options.maxLength;
+    var anchor = options.anchor || source.position;
+    var forceFunction = options.forceFunction;
 
-    for (var i = 0; i < targets.length; i++) {
-        var target = targets[i];
-        var p2 = target.position;
-        var v2 = target.velocity;
+    var i;
+    var target;
+    var p2;
+    var v2;
+    var dist;
+    var m;
+
+    for (i = 0; i < targets.length; i++) {
+        target = targets[i];
+        p2 = target.position;
+        v2 = target.velocity;
 
         anchor.sub(p2).put(disp);
-        var dist = disp.norm() - restLength;
+        dist = disp.norm() - restLength;
 
         if (dist === 0) return;
 
         //if dampingRatio specified, then override strength and damping
-        var m      = target.mass;
+        m      = target.mass;
         stiffness *= m;
         damping   *= m;
 
-        disp.normalize(stiffness * this.forceFunction(dist, lMax))
+        disp.normalize(stiffness * forceFunction(dist, maxLength))
             .put(force);
 
         if (damping)
@@ -10732,8 +11325,6 @@ Spring.prototype.applyForce = function applyForce(targets, source) {
 
         target.applyForce(force);
         if (source) source.applyForce(force.mult(-1));
-
-        this.setEnergy(_calcEnergy(stiffness, dist));
     }
 };
 
@@ -10741,32 +11332,26 @@ Spring.prototype.applyForce = function applyForce(targets, source) {
  * Calculates the potential energy of the spring.
  *
  * @method getEnergy
- * @param target {Body}     The physics body attached to the spring
- * @return energy {Number}
+ * @param [targets] target  The physics body attached to the spring
+ * @return {source}         The potential energy of the spring
  */
-Spring.prototype.getEnergy = function getEnergy(target) {
-    var options        = this.options;
+Spring.prototype.getEnergy = function getEnergy(targets, source) {
+    var options     = this.options;
     var restLength  = options.length;
-    var anchor      = options.anchor;
+    var anchor      = (source) ? source.position : options.anchor;
     var strength    = options.stiffness;
 
-    var dist = anchor.sub(target.position).norm() - restLength;
-    return 0.5 * strength * dist * dist;
-};
-
-/**
- * Sets the anchor to a new position
- *
- * @method setAnchor
- * @param anchor {Array}    New anchor of the spring
- */
-Spring.prototype.setAnchor = function setAnchor(anchor) {
-    if (!this.options.anchor) this.options.anchor = new Vector();
-    this.options.anchor.set(anchor);
+    var energy = 0.0;
+    for (var i = 0; i < targets.length; i++){
+        var target = targets[i];
+        var dist = anchor.sub(target.position).norm() - restLength;
+        energy += 0.5 * strength * dist * dist;
+    }
+    return energy;
 };
 
 module.exports = Spring;
-},{"../../math/Vector":40,"./Force":63}],68:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Force":64}],69:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -10789,14 +11374,13 @@ var Vector = _dereq_('../../math/Vector');
  *  @param {Object} options options to set on drag
  */
 function VectorField(options) {
+    Force.call(this);
+
     this.options = Object.create(VectorField.DEFAULT_OPTIONS);
     if (options) this.setOptions(options);
 
-    _setFieldOptions.call(this, this.options.field);
-    Force.call(this);
-
     //registers
-    this.evaluation = new Vector(0,0,0);
+    this.evaluation = new Vector();
 }
 
 VectorField.prototype = Object.create(Force.prototype);
@@ -10819,7 +11403,7 @@ VectorField.FIELDS = {
      * @return {Number} unscaled force
      */
     CONSTANT : function(v, options) {
-        return v.set(options.direction);
+        options.direction.put(this.evaluation);
     },
 
     /**
@@ -10827,10 +11411,10 @@ VectorField.FIELDS = {
      * @attribute LINEAR
      * @type Function
      * @param v {Vector} Current position of physics body
-     * @return {Number} unscaled force
+     * @return {Vector} unscaled force
      */
     LINEAR : function(v) {
-        return v;
+        v.put(this.evaluation);
     },
 
     /**
@@ -10838,23 +11422,10 @@ VectorField.FIELDS = {
      * @attribute RADIAL
      * @type Function
      * @param v {Vector} Current position of physics body
-     * @return {Number} unscaled force
+     * @return {Vector} unscaled force
      */
     RADIAL : function(v) {
-        return v.set(v.mult(-1, v));
-    },
-
-    /**
-     * Spherical force
-     * @attribute SPHERE_ATTRACTOR
-     * @type Function
-     * @param v {Vector}        Current position of physics body
-     * @param options {Object}  An object with the radius of the sphere
-     *      Pass a {radius : Number} into the VectorField options
-     * @return {Number} unscaled force
-     */
-    SPHERE_ATTRACTOR : function(v, options) {
-        return v.set(v.mult((options.radius - v.norm()) / v.norm()));
+        v.mult(-1).put(this.evaluation);
     },
 
     /**
@@ -10864,10 +11435,10 @@ VectorField.FIELDS = {
      * @param v {Vector}        Current position of physics body
      * @param options {Object}  And object with the position of the attractor
      *      Pass a {position : Vector} into the VectorField options
-     * @return {Number} unscaled force
+     * @return {Vector} unscaled force
      */
     POINT_ATTRACTOR : function(v, options) {
-        return v.set(options.position.sub(v));
+        options.position.sub(v).put(this.evaluation);
     }
 };
 
@@ -10884,9 +11455,9 @@ VectorField.DEFAULT_OPTIONS = {
      *    Range : [0, 10]
      * @attribute strength
      * @type Number
-     * @default 1
+     * @default .01
      */
-    strength : 1,
+    strength : .01,
 
     /**
      * Type of vectorfield
@@ -10904,7 +11475,11 @@ VectorField.DEFAULT_OPTIONS = {
  * @param {Objects} options
  */
 VectorField.prototype.setOptions = function setOptions(options) {
-    for (var key in options) this.options[key] = options[key];
+    if (options.strength !== undefined) this.options.strength = options.strength;
+    if (options.field !== undefined) {
+        this.options.field = options.field;
+        _setFieldOptions.call(this, this.options.field);
+    }
 };
 
 function _setFieldOptions(field) {
@@ -10913,43 +11488,68 @@ function _setFieldOptions(field) {
     switch (field) {
         case FIELDS.CONSTANT:
             if (!this.options.direction) this.options.direction = new Vector(0,1,0);
+            else if (this.options.direction instanceof Array) this.options.direction = new Vector(this.options.direction);
             break;
         case FIELDS.POINT_ATTRACTOR:
             if (!this.options.position) this.options.position = new Vector(0,0,0);
-            break;
-        case FIELDS.SPHERE_ATTRACTOR:
-            if (!this.options.radius) this.options.radius = 1;
+            else if (this.options.position instanceof Array) this.options.position = new Vector(this.options.position);
             break;
     }
 }
 
-function _evaluate(v) {
-    var evaluation = this.evaluation;
-    var field = this.options.field;
-    evaluation.set(v);
-    return field(evaluation, this.options);
-}
-
 /**
- * Adds the vectorfield's force to a physics body's force accumulator.
+ * Adds the VectorField's force to a physics body's force accumulator.
  *
  * @method applyForce
  * @param targets {Array.body} Array of bodies to apply force to.
  */
 VectorField.prototype.applyForce = function applyForce(targets) {
     var force = this.force;
-    for (var i = 0; i < targets.length; i++) {
-        var particle = targets[i];
-        force.set(
-            _evaluate.call(this, particle.position)
-            .mult(particle.mass * this.options.strength)
-        );
-        particle.applyForce(force);
+    var strength = this.options.strength;
+    var field = this.options.field;
+
+    var i;
+    var target;
+
+    for (i = 0; i < targets.length; i++) {
+        target = targets[i];
+        field.call(this, target.position, this.options);
+        this.evaluation.mult(target.mass * strength).put(force);
+        target.applyForce(force);
     }
 };
 
+VectorField.prototype.getEnergy = function getEnergy(targets) {
+    var field = this.options.field;
+    var FIELDS = VectorField.FIELDS;
+
+    var energy = 0;
+
+    var i;
+    var target;
+    switch (field) {
+        case FIELDS.CONSTANT:
+            energy = targets.length * this.options.direction.norm();
+            break;
+        case FIELDS.RADIAL:
+            for (i = 0; i < targets.length; i++){
+                target = targets[i];
+                energy += target.position.norm();
+            }
+            break;
+        case FIELDS.POINT_ATTRACTOR:
+            for (i = 0; i < targets.length; i++){
+                target = targets[i];
+                energy += target.position.sub(this.options.position).norm();
+            }
+            break;
+    }
+    energy *= this.options.strength;
+    return energy;
+};
+
 module.exports = VectorField;
-},{"../../math/Vector":40,"./Force":63}],69:[function(_dereq_,module,exports){
+},{"../../math/Vector":41,"./Force":64}],70:[function(_dereq_,module,exports){
 module.exports = {
   Drag: _dereq_('./Drag'),
   Force: _dereq_('./Force'),
@@ -10960,16 +11560,16 @@ module.exports = {
   VectorField: _dereq_('./VectorField')
 };
 
-},{"./Drag":62,"./Force":63,"./Repulsion":64,"./RotationalDrag":65,"./RotationalSpring":66,"./Spring":67,"./VectorField":68}],70:[function(_dereq_,module,exports){
+},{"./Drag":63,"./Force":64,"./Repulsion":65,"./RotationalDrag":66,"./RotationalSpring":67,"./Spring":68,"./VectorField":69}],71:[function(_dereq_,module,exports){
 module.exports = {
   PhysicsEngine: _dereq_('./PhysicsEngine'),
   bodies: _dereq_('./bodies'),
-  forces: _dereq_('./forces'),
   constraints: _dereq_('./constraints'),
+  forces: _dereq_('./forces'),
   integrators: _dereq_('./integrators')
 };
 
-},{"./PhysicsEngine":47,"./bodies":52,"./constraints":61,"./forces":69,"./integrators":72}],71:[function(_dereq_,module,exports){
+},{"./PhysicsEngine":48,"./bodies":53,"./constraints":62,"./forces":70,"./integrators":73}],72:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -10979,7 +11579,8 @@ module.exports = {
  * @copyright Famous Industries, Inc. 2014
  */
 
-var OptionsManager = _dereq_('../../core/OptionsManager');
+
+
 
 /**
  * Ordinary Differential Equation (ODE) Integrator.
@@ -10999,58 +11600,7 @@ var OptionsManager = _dereq_('../../core/OptionsManager');
  * @constructor
  * @param {Object} options Options to set
  */
-function SymplecticEuler(options) {
-    this.options = Object.create(SymplecticEuler.DEFAULT_OPTIONS);
-    this._optionsManager = new OptionsManager(this.options);
-
-    if (options) this.setOptions(options);
-}
-
-/**
- * @property SymplecticEuler.DEFAULT_OPTIONS
- * @type Object
- * @protected
- * @static
- */
-SymplecticEuler.DEFAULT_OPTIONS = {
-
-    /**
-     * The maximum velocity of a physics body
-     *      Range : [0, Infinity]
-     * @attribute velocityCap
-     * @type Number
-     */
-
-    velocityCap : undefined,
-
-    /**
-     * The maximum angular velocity of a physics body
-     *      Range : [0, Infinity]
-     * @attribute angularVelocityCap
-     * @type Number
-     */
-    angularVelocityCap : undefined
-};
-
-/*
- * Setter for options
- *
- * @method setOptions
- * @param {Object} options
- */
-SymplecticEuler.prototype.setOptions = function setOptions(options) {
-    this._optionsManager.patch(options);
-};
-
-/*
- * Getter for options
- *
- * @method getOptions
- * @return {Object} options
- */
-SymplecticEuler.prototype.getOptions = function getOptions() {
-    return this._optionsManager.value();
-};
+var SymplecticEuler = {};
 
 /*
  * Updates the velocity of a physics body from its accumulated force.
@@ -11060,7 +11610,7 @@ SymplecticEuler.prototype.getOptions = function getOptions() {
  * @param {Body} physics body
  * @param {Number} dt delta time
  */
-SymplecticEuler.prototype.integrateVelocity = function integrateVelocity(body, dt) {
+SymplecticEuler.integrateVelocity = function integrateVelocity(body, dt) {
     var v = body.velocity;
     var w = body.inverseMass;
     var f = body.force;
@@ -11079,11 +11629,10 @@ SymplecticEuler.prototype.integrateVelocity = function integrateVelocity(body, d
  * @param {Body} physics body
  * @param {Number} dt delta time
  */
-SymplecticEuler.prototype.integratePosition = function integratePosition(body, dt) {
+SymplecticEuler.integratePosition = function integratePosition(body, dt) {
     var p = body.position;
     var v = body.velocity;
 
-    if (this.options.velocityCap) v.cap(this.options.velocityCap).put(v);
     p.add(v.mult(dt)).put(p);
 };
 
@@ -11095,13 +11644,12 @@ SymplecticEuler.prototype.integratePosition = function integratePosition(body, d
  * @param {Body} physics body (except a particle)
  * @param {Number} dt delta time
  */
-SymplecticEuler.prototype.integrateAngularMomentum = function integrateAngularMomentum(body, dt) {
+SymplecticEuler.integrateAngularMomentum = function integrateAngularMomentum(body, dt) {
     var L = body.angularMomentum;
     var t = body.torque;
 
     if (t.isZero()) return;
 
-    if (this.options.angularVelocityCap) t.cap(this.options.angularVelocityCap).put(t);
     L.add(t.mult(dt)).put(L);
     t.clear();
 };
@@ -11114,7 +11662,7 @@ SymplecticEuler.prototype.integrateAngularMomentum = function integrateAngularMo
  * @param {Body} physics body (except a particle)
  * @param {Number} dt delta time
  */
-SymplecticEuler.prototype.integrateOrientation = function integrateOrientation(body, dt) {
+SymplecticEuler.integrateOrientation = function integrateOrientation(body, dt) {
     var q = body.orientation;
     var w = body.angularVelocity;
 
@@ -11124,12 +11672,12 @@ SymplecticEuler.prototype.integrateOrientation = function integrateOrientation(b
 };
 
 module.exports = SymplecticEuler;
-},{"../../core/OptionsManager":9}],72:[function(_dereq_,module,exports){
+},{}],73:[function(_dereq_,module,exports){
 module.exports = {
   SymplecticEuler: _dereq_('./SymplecticEuler')
 };
 
-},{"./SymplecticEuler":71}],73:[function(_dereq_,module,exports){
+},{"./SymplecticEuler":72}],74:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -11225,7 +11773,7 @@ CanvasSurface.prototype.recall = function recall(target) {
  */
 CanvasSurface.prototype.getContext = function getContext(contextId) {
     this._contextId = contextId;
-    return this._currTarget ? this._currTarget.getContext(contextId) : this._backBuffer.getContext(contextId);
+    return this._currentTarget ? this._currentTarget.getContext(contextId) : this._backBuffer.getContext(contextId);
 };
 
 /**
@@ -11238,14 +11786,14 @@ CanvasSurface.prototype.getContext = function getContext(contextId) {
 CanvasSurface.prototype.setSize = function setSize(size, canvasSize) {
     Surface.prototype.setSize.apply(this, arguments);
     if (canvasSize) this._canvasSize = [canvasSize[0], canvasSize[1]];
-    if (this._currTarget) {
-        this._currTarget.width = this._canvasSize[0];
-        this._currTarget.height = this._canvasSize[1];
+    if (this._currentTarget) {
+        this._currentTarget.width = this._canvasSize[0];
+        this._currentTarget.height = this._canvasSize[1];
     }
 };
 
 module.exports = CanvasSurface;
-},{"../core/Surface":13}],74:[function(_dereq_,module,exports){
+},{"../core/Surface":14}],75:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -11358,7 +11906,7 @@ ContainerSurface.prototype.commit = function commit(context, transform, opacity,
 };
 
 module.exports = ContainerSurface;
-},{"../core/Context":1,"../core/Surface":13}],75:[function(_dereq_,module,exports){
+},{"../core/Context":1,"../core/Surface":14}],76:[function(_dereq_,module,exports){
 var ContainerSurface = _dereq_('./ContainerSurface');
 
 function FormContainerSurface(options) {
@@ -11377,7 +11925,7 @@ FormContainerSurface.prototype.deploy = function deploy(target) {
 };
 
 module.exports = FormContainerSurface;
-},{"./ContainerSurface":74}],76:[function(_dereq_,module,exports){
+},{"./ContainerSurface":75}],77:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -11404,6 +11952,33 @@ function ImageSurface(options) {
     Surface.apply(this, arguments);
 }
 
+var urlCache = [];
+var countCache = [];
+var nodeCache = [];
+var cacheEnabled = true;
+
+ImageSurface.enableCache = function enableCache() {
+    cacheEnabled = true;
+};
+
+ImageSurface.disableCache = function disableCache() {
+    cacheEnabled = false;
+};
+
+ImageSurface.clearCache = function clearCache() {
+    urlCache = [];
+    countCache = [];
+    nodeCache = [];
+};
+
+ImageSurface.getCache = function getCache() {
+    return {
+        urlCache: urlCache,
+        countCache: countCache,
+        nodeCache: countCache
+    };
+};
+
 ImageSurface.prototype = Object.create(Surface.prototype);
 ImageSurface.prototype.constructor = ImageSurface;
 ImageSurface.prototype.elementType = 'img';
@@ -11415,6 +11990,26 @@ ImageSurface.prototype.elementClass = 'famous-surface';
  * @param {string} imageUrl
  */
 ImageSurface.prototype.setContent = function setContent(imageUrl) {
+    var urlIndex = urlCache.indexOf(this._imageUrl);
+    if (urlIndex !== -1) {
+        if (countCache[urlIndex] === 1) {
+            urlCache.splice(urlIndex, 1);
+            countCache.splice(urlIndex, 1);
+            nodeCache.splice(urlIndex, 1);
+        } else {
+            countCache[urlIndex]--;
+        }
+    }
+
+    urlIndex = urlCache.indexOf(imageUrl);
+    if (urlIndex === -1) {
+        urlCache.push(imageUrl);
+        countCache.push(1);
+    }
+    else {
+        countCache[urlIndex]++;
+    }
+
     this._imageUrl = imageUrl;
     this._contentDirty = true;
 };
@@ -11427,6 +12022,13 @@ ImageSurface.prototype.setContent = function setContent(imageUrl) {
  * @param {Node} target document parent of this container
  */
 ImageSurface.prototype.deploy = function deploy(target) {
+    var urlIndex = urlCache.indexOf(this._imageUrl);
+    if (nodeCache[urlIndex] === undefined && cacheEnabled) {
+        var img = new Image();
+        img.src = this._imageUrl || '';
+        nodeCache[urlIndex] = img;
+    }
+
     target.src = this._imageUrl || '';
 };
 
@@ -11443,7 +12045,7 @@ ImageSurface.prototype.recall = function recall(target) {
 };
 
 module.exports = ImageSurface;
-},{"../core/Surface":13}],77:[function(_dereq_,module,exports){
+},{"../core/Surface":14}],78:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -11477,7 +12079,7 @@ function InputSurface(options) {
 
     this.on('click', this.focus.bind(this));
     window.addEventListener('click', function(event) {
-        if (event.target !== this._currTarget) this.blur();
+        if (event.target !== this._currentTarget) this.blur();
     }.bind(this));
 }
 InputSurface.prototype = Object.create(Surface.prototype);
@@ -11506,7 +12108,7 @@ InputSurface.prototype.setPlaceholder = function setPlaceholder(str) {
  * @return {InputSurface} this, allowing method chaining.
  */
 InputSurface.prototype.focus = function focus() {
-    if (this._currTarget) this._currTarget.focus();
+    if (this._currentTarget) this._currentTarget.focus();
     return this;
 };
 
@@ -11517,7 +12119,7 @@ InputSurface.prototype.focus = function focus() {
  * @return {InputSurface} this, allowing method chaining.
  */
 InputSurface.prototype.blur = function blur() {
-    if (this._currTarget) this._currTarget.blur();
+    if (this._currentTarget) this._currentTarget.blur();
     return this;
 };
 
@@ -11556,8 +12158,8 @@ InputSurface.prototype.setType = function setType(str) {
  * @return {string} value of element
  */
 InputSurface.prototype.getValue = function getValue() {
-    if (this._currTarget) {
-        return this._currTarget.value;
+    if (this._currentTarget) {
+        return this._currentTarget.value;
     }
     else {
         return this._value;
@@ -11603,7 +12205,7 @@ InputSurface.prototype.deploy = function deploy(target) {
 };
 
 module.exports = InputSurface;
-},{"../core/Surface":13}],78:[function(_dereq_,module,exports){
+},{"../core/Surface":14}],79:[function(_dereq_,module,exports){
 var InputSurface = _dereq_('./InputSurface');
 
 function SubmitInputSurface(options) {
@@ -11625,7 +12227,7 @@ SubmitInputSurface.prototype.deploy = function deploy(target) {
 };
 
 module.exports = SubmitInputSurface;
-},{"./InputSurface":77}],79:[function(_dereq_,module,exports){
+},{"./InputSurface":78}],80:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -11689,7 +12291,7 @@ TextareaSurface.prototype.setPlaceholder = function setPlaceholder(str) {
  * @return {TextareaSurface} this, allowing method chaining.
  */
 TextareaSurface.prototype.focus = function focus() {
-    if (this._currTarget) this._currTarget.focus();
+    if (this._currentTarget) this._currentTarget.focus();
     return this;
 };
 
@@ -11700,7 +12302,7 @@ TextareaSurface.prototype.focus = function focus() {
  * @return {TextareaSurface} this, allowing method chaining.
  */
 TextareaSurface.prototype.blur = function blur() {
-    if (this._currTarget) this._currTarget.blur();
+    if (this._currentTarget) this._currentTarget.blur();
     return this;
 };
 
@@ -11725,8 +12327,8 @@ TextareaSurface.prototype.setValue = function setValue(str) {
  * @return {string} value of element
  */
 TextareaSurface.prototype.getValue = function getValue() {
-    if (this._currTarget) {
-        return this._currTarget.value;
+    if (this._currentTarget) {
+        return this._currentTarget.value;
     }
     else {
         return this._value;
@@ -11818,7 +12420,7 @@ TextareaSurface.prototype.deploy = function deploy(target) {
 };
 
 module.exports = TextareaSurface;
-},{"../core/Surface":13}],80:[function(_dereq_,module,exports){
+},{"../core/Surface":14}],81:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -11844,16 +12446,16 @@ var Surface = _dereq_('../core/Surface');
  * @param {Array.Number} [options.size] [width, height] in pixels
  * @param {Array.string} [options.classes] CSS classes to set on inner content
  * @param {Array} [options.properties] string dictionary of HTML attributes to set on target div
- * @param {string} [options.content] inner (HTML) content of surface
+ * @param {String} [options.src] videoUrl URL
  * @param {boolean} [options.autoplay] autoplay
  */
 function VideoSurface(options) {
+    Surface.apply(this, arguments);
     this._videoUrl = undefined;
     this.options = Object.create(VideoSurface.DEFAULT_OPTIONS);
     if (options) this.setOptions(options);
-
-    Surface.apply(this, arguments);
 }
+
 VideoSurface.prototype = Object.create(Surface.prototype);
 VideoSurface.prototype.constructor = VideoSurface;
 
@@ -11873,8 +12475,13 @@ VideoSurface.prototype.elementClass = 'famous-surface';
  * @param {Boolean} [options.autoplay] HTML autoplay
  */
 VideoSurface.prototype.setOptions = function setOptions(options) {
-    for (var key in VideoSurface.DEFAULT_OPTIONS) {
-        if (options[key] !== undefined) this.options[key] = options[key];
+    if (options.size) this.setSize(options.size);
+    if (options.classes) this.setClasses(options.classes);
+    if (options.properties) this.setProperties(options.properties);
+    if (options.autoplay) this.options.autoplay = options.autoplay;
+    if (options.src) {
+        this._videoUrl = options.src;
+        this._contentDirty = true;
     }
 };
 
@@ -11916,7 +12523,7 @@ VideoSurface.prototype.recall = function recall(target) {
 };
 
 module.exports = VideoSurface;
-},{"../core/Surface":13}],81:[function(_dereq_,module,exports){
+},{"../core/Surface":14}],82:[function(_dereq_,module,exports){
 module.exports = {
   CanvasSurface: _dereq_('./CanvasSurface'),
   ContainerSurface: _dereq_('./ContainerSurface'),
@@ -11928,7 +12535,7 @@ module.exports = {
   VideoSurface: _dereq_('./VideoSurface')
 };
 
-},{"./CanvasSurface":73,"./ContainerSurface":74,"./FormContainerSurface":75,"./ImageSurface":76,"./InputSurface":77,"./SubmitInputSurface":78,"./TextareaSurface":79,"./VideoSurface":80}],82:[function(_dereq_,module,exports){
+},{"./CanvasSurface":74,"./ContainerSurface":75,"./FormContainerSurface":76,"./ImageSurface":77,"./InputSurface":78,"./SubmitInputSurface":79,"./TextareaSurface":80,"./VideoSurface":81}],83:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -11954,11 +12561,11 @@ function CachedMap(mappingFunction) {
 
 /**
  * Creates a mapping function with a cache.
- * This is the main entrypoint for this object.
+ * This is the main entry point for this object.
  * @static
  * @method create
  * @param {function} mappingFunction mapping
- * @return {function} memoized mapping function
+ * @return {function} memorized mapping function
  */
 CachedMap.create = function create(mappingFunction) {
     var instance = new CachedMap(mappingFunction);
@@ -11966,7 +12573,7 @@ CachedMap.create = function create(mappingFunction) {
 };
 
 /**
- * Retrieve items from cache or from mapping functin.
+ * Retrieve items from cache or from mapping function.
  *
  * @method get
  * @param {Object} input input key
@@ -11980,7 +12587,7 @@ CachedMap.prototype.get = function get(input) {
 };
 
 module.exports = CachedMap;
-},{}],83:[function(_dereq_,module,exports){
+},{}],84:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -11993,7 +12600,7 @@ module.exports = CachedMap;
 
 
 
-/*
+/**
  * A library of curves which map an animation explicitly as a function of time.
  *
  * @class Easing
@@ -12273,7 +12880,7 @@ var Easing = {
 };
 
 module.exports = Easing;
-},{}],84:[function(_dereq_,module,exports){
+},{}],85:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -12349,7 +12956,7 @@ MultipleTransition.prototype.reset = function reset(startState) {
 };
 
 module.exports = MultipleTransition;
-},{"../utilities/Utility":94}],85:[function(_dereq_,module,exports){
+},{"../utilities/Utility":95}],86:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -12435,7 +13042,7 @@ SnapTransition.DEFAULT_OPTIONS = {
 };
 
 function _getEnergy() {
-    return this.particle.getEnergy() + this.spring.getEnergy(this.particle);
+    return this.particle.getEnergy() + this.spring.getEnergy([this.particle]);
 }
 
 function _setAbsoluteRestTolerance() {
@@ -12616,7 +13223,7 @@ SnapTransition.prototype.set = function set(state, definition, callback) {
 };
 
 module.exports = SnapTransition;
-},{"../math/Vector":40,"../physics/PhysicsEngine":47,"../physics/bodies/Particle":50,"../physics/constraints/Snap":57}],86:[function(_dereq_,module,exports){
+},{"../math/Vector":41,"../physics/PhysicsEngine":48,"../physics/bodies/Particle":51,"../physics/constraints/Snap":58}],87:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -12705,7 +13312,7 @@ SpringTransition.DEFAULT_OPTIONS = {
 };
 
 function _getEnergy() {
-    return this.particle.getEnergy() + this.spring.getEnergy(this.particle);
+    return this.particle.getEnergy() + this.spring.getEnergy([this.particle]);
 }
 
 function _setParticlePosition(p) {
@@ -12893,7 +13500,7 @@ SpringTransition.prototype.set = function set(endState, definition, callback) {
 };
 
 module.exports = SpringTransition;
-},{"../math/Vector":40,"../physics/PhysicsEngine":47,"../physics/bodies/Particle":50,"../physics/forces/Spring":67}],87:[function(_dereq_,module,exports){
+},{"../math/Vector":41,"../physics/PhysicsEngine":48,"../physics/bodies/Particle":51,"../physics/forces/Spring":68}],88:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -12942,6 +13549,15 @@ function Transitionable(start) {
 }
 
 var transitionMethods = {};
+
+Transitionable.register = function register(methods) {
+    var success = true;
+    for (var method in methods) {
+        if (!Transitionable.registerMethod(method, methods[method]))
+            success = false;
+    }
+    return success;
+};
 
 Transitionable.registerMethod = function registerMethod(name, engineClass) {
     if (!(name in transitionMethods)) {
@@ -13101,11 +13717,11 @@ Transitionable.prototype.isActive = function isActive() {
  * @method halt
  */
 Transitionable.prototype.halt = function halt() {
-    this.set(this.get());
+    return this.set(this.get());
 };
 
 module.exports = Transitionable;
-},{"./MultipleTransition":84,"./TweenTransition":89}],88:[function(_dereq_,module,exports){
+},{"./MultipleTransition":85,"./TweenTransition":90}],89:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -13130,10 +13746,16 @@ var Utility = _dereq_('../utilities/Utility');
  */
 function TransitionableTransform(transform) {
     this._final = Transform.identity.slice();
-    this.translate = new Transitionable([0, 0, 0]);
-    this.rotate = new Transitionable([0, 0, 0]);
-    this.skew = new Transitionable([0, 0, 0]);
-    this.scale = new Transitionable([1, 1, 1]);
+
+    this._finalTranslate = [0, 0, 0];
+    this._finalRotate = [0, 0, 0];
+    this._finalSkew = [0, 0, 0];
+    this._finalScale = [1, 1, 1];
+
+    this.translate = new Transitionable(this._finalTranslate);
+    this.rotate = new Transitionable(this._finalRotate);
+    this.skew = new Transitionable(this._finalSkew);
+    this.scale = new Transitionable(this._finalScale);
 
     if (transform) this.set(transform);
 }
@@ -13144,6 +13766,15 @@ function _build() {
         rotate: this.rotate.get(),
         skew: this.skew.get(),
         scale: this.scale.get()
+    });
+}
+
+function _buildFinal() {
+    return Transform.build({
+        translate: this._finalTranslate,
+        rotate: this._finalRotate,
+        skew: this._finalSkew,
+        scale: this._finalScale
     });
 }
 
@@ -13159,11 +13790,9 @@ function _build() {
  * @return {TransitionableTransform}
  */
 TransitionableTransform.prototype.setTranslate = function setTranslate(translate, transition, callback) {
+    this._finalTranslate = translate;
+    this._final = _buildFinal.call(this);
     this.translate.set(translate, transition, callback);
-    this._final = this._final.slice();
-    this._final[12] = translate[0];
-    this._final[13] = translate[1];
-    if (translate[2] !== undefined) this._final[14] = translate[2];
     return this;
 };
 
@@ -13179,11 +13808,9 @@ TransitionableTransform.prototype.setTranslate = function setTranslate(translate
  * @return {TransitionableTransform}
  */
 TransitionableTransform.prototype.setScale = function setScale(scale, transition, callback) {
+    this._finalScale = scale;
+    this._final = _buildFinal.call(this);
     this.scale.set(scale, transition, callback);
-    this._final = this._final.slice();
-    this._final[0] = scale[0];
-    this._final[5] = scale[1];
-    if (scale[2] !== undefined) this._final[10] = scale[2];
     return this;
 };
 
@@ -13199,14 +13826,9 @@ TransitionableTransform.prototype.setScale = function setScale(scale, transition
  * @return {TransitionableTransform}
  */
 TransitionableTransform.prototype.setRotate = function setRotate(eulerAngles, transition, callback) {
+    this._finalRotate = eulerAngles;
+    this._final = _buildFinal.call(this);
     this.rotate.set(eulerAngles, transition, callback);
-    this._final = _build.call(this);
-    this._final = Transform.build({
-        translate: this.translate.get(),
-        rotate: eulerAngles,
-        scale: this.scale.get(),
-        skew: this.skew.get()
-    });
     return this;
 };
 
@@ -13222,13 +13844,9 @@ TransitionableTransform.prototype.setRotate = function setRotate(eulerAngles, tr
  * @return {TransitionableTransform}
  */
 TransitionableTransform.prototype.setSkew = function setSkew(skewAngles, transition, callback) {
+    this._finalSkew = skewAngles;
+    this._final = _buildFinal.call(this);
     this.skew.set(skewAngles, transition, callback);
-    this._final = Transform.build({
-        translate: this.translate.get(),
-        rotate: this.rotate.get(),
-        scale: this.scale.get(),
-        skew: skewAngles
-    });
     return this;
 };
 
@@ -13245,8 +13863,13 @@ TransitionableTransform.prototype.setSkew = function setSkew(skewAngles, transit
  * @return {TransitionableTransform}
  */
 TransitionableTransform.prototype.set = function set(transform, transition, callback) {
-    this._final = transform;
     var components = Transform.interpret(transform);
+
+    this._finalTranslate = components.translate;
+    this._finalRotate = components.rotate;
+    this._finalSkew = components.skew;
+    this._finalScale = components.scale;
+    this._final = transform;
 
     var _callback = callback ? Utility.after(4, callback) : null;
     this.translate.set(components.translate, transition, _callback);
@@ -13312,15 +13935,22 @@ TransitionableTransform.prototype.isActive = function isActive() {
  * @method halt
  */
 TransitionableTransform.prototype.halt = function halt() {
-    this._final = this.get();
     this.translate.halt();
     this.rotate.halt();
     this.skew.halt();
     this.scale.halt();
+
+    this._final = this.get();
+    this._finalTranslate = this.translate.get();
+    this._finalRotate = this.rotate.get();
+    this._finalSkew = this.skew.get();
+    this._finalScale = this.scale.get();
+
+    return this;
 };
 
 module.exports = TransitionableTransform;
-},{"../core/Transform":14,"../utilities/Utility":94,"./Transitionable":87}],89:[function(_dereq_,module,exports){
+},{"../core/Transform":15,"../utilities/Utility":95,"./Transitionable":88}],90:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -13747,7 +14377,7 @@ TweenTransition.customCurve = function customCurve(v1, v2) {
 };
 
 module.exports = TweenTransition;
-},{}],90:[function(_dereq_,module,exports){
+},{}],91:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -13844,11 +14474,11 @@ WallTransition.DEFAULT_OPTIONS = {
      * @type Number
      * @default 0.5
      */
-    resitution : 0.5
+    restitution : 0.5
 };
 
 function _getEnergy() {
-    return this.particle.getEnergy() + this.spring.getEnergy(this.particle);
+    return this.particle.getEnergy() + this.spring.getEnergy([this.particle]);
 }
 
 function _setAbsoluteRestTolerance() {
@@ -14045,7 +14675,7 @@ WallTransition.prototype.set = function set(state, definition, callback) {
 };
 
 module.exports = WallTransition;
-},{"../math/Vector":40,"../physics/PhysicsEngine":47,"../physics/bodies/Particle":50,"../physics/constraints/Wall":59,"../physics/forces/Spring":67}],91:[function(_dereq_,module,exports){
+},{"../math/Vector":41,"../physics/PhysicsEngine":48,"../physics/bodies/Particle":51,"../physics/constraints/Wall":60,"../physics/forces/Spring":68}],92:[function(_dereq_,module,exports){
 module.exports = {
   CachedMap: _dereq_('./CachedMap'),
   Easing: _dereq_('./Easing'),
@@ -14058,7 +14688,7 @@ module.exports = {
   WallTransition: _dereq_('./WallTransition')
 };
 
-},{"./CachedMap":82,"./Easing":83,"./MultipleTransition":84,"./SnapTransition":85,"./SpringTransition":86,"./Transitionable":87,"./TransitionableTransform":88,"./TweenTransition":89,"./WallTransition":90}],92:[function(_dereq_,module,exports){
+},{"./CachedMap":83,"./Easing":84,"./MultipleTransition":85,"./SnapTransition":86,"./SpringTransition":87,"./Transitionable":88,"./TransitionableTransform":89,"./TweenTransition":90,"./WallTransition":91}],93:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -14151,7 +14781,7 @@ var KeyCodes = {
 };
 
 module.exports = KeyCodes;
-},{}],93:[function(_dereq_,module,exports){
+},{}],94:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -14176,7 +14806,7 @@ var FamousEngine = _dereq_('../core/Engine');
 
 var _event  = 'prerender';
 
-var getTime = (window.performance) ?
+var getTime = (window.performance && window.performance.now) ?
     function() {
         return window.performance.now();
     }
@@ -14352,7 +14982,7 @@ module.exports = {
     every : every,
     clear : clear
 };
-},{"../core/Engine":3}],94:[function(_dereq_,module,exports){
+},{"../core/Engine":4}],95:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -14441,15 +15071,47 @@ Utility.createDocumentFragmentFromHTML = function createDocumentFragmentFromHTML
     return result;
 };
 
+/*
+ *  Deep clone an object.
+ *  @param b {Object} Object to clone
+ *  @return a {Object} Cloned object.
+ */
+Utility.clone = function clone(b) {
+    var a;
+    if (typeof b === 'object') {
+        a = (b instanceof Array) ? [] : {};
+        for (var key in b) {
+            if (typeof b[key] === 'object' && b[key] !== null) {
+                if (b[key] instanceof Array) {
+                    a[key] = new Array(b[key].length);
+                    for (var i = 0; i < b[key].length; i++) {
+                        a[key][i] = Utility.clone(b[key][i]);
+                    }
+                }
+                else {
+                  a[key] = Utility.clone(b[key]);
+                }
+            }
+            else {
+                a[key] = b[key];
+            }
+        }
+    }
+    else {
+        a = b;
+    }
+    return a;
+};
+
 module.exports = Utility;
-},{}],95:[function(_dereq_,module,exports){
+},{}],96:[function(_dereq_,module,exports){
 module.exports = {
   KeyCodes: _dereq_('./KeyCodes'),
   Timer: _dereq_('./Timer'),
   Utility: _dereq_('./Utility')
 };
 
-},{"./KeyCodes":92,"./Timer":93,"./Utility":94}],96:[function(_dereq_,module,exports){
+},{"./KeyCodes":93,"./Timer":94,"./Utility":95}],97:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -14502,10 +15164,11 @@ ContextualView.prototype.setOptions = function setOptions(options) {
  * Returns ContextualLayout instance's options.
  *
  * @method setOptions
+ * @param {string} key
  * @return {Options} options The instance's object of configurable options.
  */
-ContextualView.prototype.getOptions = function getOptions() {
-    return this._optionsManager.getOptions();
+ContextualView.prototype.getOptions = function getOptions(key) {
+    return this._optionsManager.getOptions(key);
 };
 
 /**
@@ -14531,7 +15194,7 @@ ContextualView.prototype.render = function render() {
 ContextualView.prototype.commit = function commit(context) {};
 
 module.exports = ContextualView;
-},{"../core/Entity":4,"../core/EventHandler":6,"../core/OptionsManager":9,"../core/Transform":14}],97:[function(_dereq_,module,exports){
+},{"../core/Entity":5,"../core/EventHandler":7,"../core/OptionsManager":10,"../core/Transform":15}],98:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -14673,7 +15336,318 @@ Deck.prototype.toggle = function toggle(callback) {
 };
 
 module.exports = Deck;
-},{"../core/OptionsManager":9,"../core/Transform":14,"../transitions/Transitionable":87,"../utilities/Utility":94,"./SequentialLayout":108}],98:[function(_dereq_,module,exports){
+},{"../core/OptionsManager":10,"../core/Transform":15,"../transitions/Transitionable":88,"../utilities/Utility":95,"./SequentialLayout":110}],99:[function(_dereq_,module,exports){
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+var RenderNode = _dereq_('../core/RenderNode');
+var Transform = _dereq_('../core/Transform');
+var OptionsManager = _dereq_('../core/OptionsManager');
+var Transitionable = _dereq_('../transitions/Transitionable');
+var EventHandler = _dereq_('../core/EventHandler');
+
+/**
+ * A layout which will arrange two renderables: a featured content, and a
+ *   concealed drawer. The drawer can be revealed from any side of the
+ *   content (left, top, right, bottom) by dragging the content.
+ *
+ *   A @link{Sync} must be piped in to recieve user input.
+ *
+ *   Events:
+ *     broadcasts: 'open', 'close'
+ *     listens to: 'update', 'end'
+ *
+ * @class DrawerLayout
+ *
+ * @constructor
+ *
+ * @param [options] {Object}                                An object of configurable options
+ * @param [options.side=DrawerLayout.SIDES.LEFT] {Number}   The side of the content the drawer is placed.
+ *                                                          Choice of DrawerLayout.SIDES.LEFT/RIGHT/TOP/BOTTOM
+ * @param [options.drawerLength=0] {Number}                 The default length of the drawer
+ * @param [options.velocityThreshold=0] {Number}            The velocity threshold to trigger a toggle
+ * @param [options.positionThreshold=0] {Number}            The position threshold to trigger a toggle
+ * @param [options.transition=true] {Boolean|Object}        The toggle transition
+ */
+function DrawerLayout(options) {
+    this.options = Object.create(DrawerLayout.DEFAULT_OPTIONS);
+    this._optionsManager = new OptionsManager(this.options);
+    if (options) this.setOptions(options);
+
+    this._position = new Transitionable(0);
+    this._direction = _getDirectionFromSide(this.options.side);
+    this._orientation = _getOrientationFromSide(this.options.side);
+    this._isOpen = false;
+    this._cachedLength = 0;
+
+    this.drawer = new RenderNode();
+    this.content = new RenderNode();
+
+    this._eventInput = new EventHandler();
+    this._eventOutput = new EventHandler();
+    EventHandler.setInputHandler(this, this._eventInput);
+    EventHandler.setOutputHandler(this, this._eventOutput);
+
+    this._eventInput.on('update', _handleUpdate.bind(this));
+    this._eventInput.on('end', _handleEnd.bind(this));
+}
+
+var DIRECTION_X = 0;
+var DIRECTION_Y = 1;
+
+DrawerLayout.SIDES = {
+    LEFT   : 0,
+    TOP    : 1,
+    RIGHT  : 2,
+    BOTTOM : 3
+};
+
+DrawerLayout.DEFAULT_OPTIONS = {
+    side: DrawerLayout.SIDES.LEFT,
+    drawerLength : 0,
+    velocityThreshold : 0,
+    positionThreshold : 0,
+    transition : true
+};
+
+function _getDirectionFromSide(side) {
+    var SIDES = DrawerLayout.SIDES;
+    return (side === SIDES.LEFT || side === SIDES.RIGHT) ? DIRECTION_X : DIRECTION_Y;
+}
+
+function _getOrientationFromSide(side) {
+    var SIDES = DrawerLayout.SIDES;
+    return (side === SIDES.LEFT || side === SIDES.TOP) ? 1 : -1;
+}
+
+function _resolveNodeSize(node) {
+    var options = this.options;
+    var size;
+    if (options.drawerLength) size = options.drawerLength;
+    else {
+        var nodeSize = node.getSize();
+        size = nodeSize ? nodeSize[this._direction] : options.drawerLength;
+    }
+    return this._orientation * size;
+}
+
+function _handleUpdate(data) {
+    var newPosition = this.getPosition() + data.delta;
+
+    var MIN_LENGTH;
+    var MAX_LENGTH;
+    this._cachedLength = _resolveNodeSize.call(this, this.drawer);
+
+    if (this._orientation === 1){
+        MIN_LENGTH = 0;
+        MAX_LENGTH = this._cachedLength;
+    }
+    else {
+        MIN_LENGTH = this._cachedLength;
+        MAX_LENGTH = 0;
+    }
+
+    if (newPosition > MAX_LENGTH) newPosition = MAX_LENGTH;
+    else if (newPosition < MIN_LENGTH) newPosition = MIN_LENGTH;
+
+    this.setPosition(newPosition);
+}
+
+function _handleEnd(data) {
+    var velocity = data.velocity;
+    var position = this._orientation * this.getPosition();
+    var options = this.options;
+
+    var MAX_LENGTH = this._orientation * this._cachedLength;
+    var positionThreshold = options.positionThreshold || MAX_LENGTH / 2;
+    var velocityThreshold = options.velocityThreshold;
+
+    if (options.transition instanceof Object)
+        options.transition.velocity = data.velocity;
+
+    if (position === 0) {
+        this._isOpen = false;
+        return;
+    }
+
+    if (position === MAX_LENGTH) {
+        this._isOpen = true;
+        return;
+    }
+
+    var shouldToggle = Math.abs(velocity) > velocityThreshold || (!this._isOpen && position > positionThreshold) || (this._isOpen && position < positionThreshold);
+    if (shouldToggle) this.toggle();
+    else this.reset();
+}
+
+/**
+ * Patches the DrawerLayout instance's options with the passed-in ones.
+ *
+ * @method setOptions
+ * @param options {Object} options
+ */
+DrawerLayout.prototype.setOptions = function setOptions(options) {
+    this._optionsManager.setOptions(options);
+    if (options.side !== undefined) {
+        this._direction = _getDirectionFromSide(options.side);
+        this._orientation = _getOrientationFromSide(options.side);
+    }
+};
+
+/**
+ * Reveals the drawer with a transition
+ *   Emits an 'open' event when an opening transition has been committed to.
+ *
+ * @method open
+ * @param [transition] {Boolean|Object} transition definition
+ * @param [callback] {Function}         callback
+ */
+DrawerLayout.prototype.open = function open(transition, callback) {
+    if (transition instanceof Function) callback = transition;
+    if (transition === undefined) transition = this.options.transition;
+    this._cachedLength = _resolveNodeSize.call(this, this.drawer);
+    this.setPosition(this._cachedLength, transition, callback);
+    if (!this._isOpen) {
+        this._isOpen = true;
+        this._eventOutput.emit('open');
+    }
+};
+
+/**
+ * Conceals the drawer with a transition
+ *   Emits a 'close' event when an closing transition has been committed to.
+ *
+ * @method close
+ * @param [transition] {Boolean|Object} transition definition
+ * @param [callback] {Function}         callback
+ */
+DrawerLayout.prototype.close = function close(transition, callback) {
+    if (transition instanceof Function) callback = transition;
+    if (transition === undefined) transition = this.options.transition;
+    this.setPosition(0, transition, callback);
+    if (this._isOpen){
+        this._isOpen = false;
+        this._eventOutput.emit('close');
+    }
+};
+
+/**
+ * Sets the position in pixels for the content's displacement
+ *
+ * @method setPosition
+ * @param position {Number}             position
+ * @param [transition] {Boolean|Object} transition definition
+ * @param [callback] {Function}         callback
+ */
+DrawerLayout.prototype.setPosition = function setPosition(position, transition, callback) {
+    if (this._position.isActive()) this._position.halt();
+    this._position.set(position, transition, callback);
+};
+
+/**
+ * Gets the position in pixels for the content's displacement
+ *
+ * @method getPosition
+ * @return position {Number} position
+ */
+DrawerLayout.prototype.getPosition = function getPosition() {
+    return this._position.get();
+};
+
+/**
+ * Sets the progress (between 0 and 1) for the content's displacement
+ *
+ * @method setProgress
+ * @param progress {Number}             position
+ * @param [transition] {Boolean|Object} transition definition
+ * @param [callback] {Function}         callback
+ */
+DrawerLayout.prototype.setProgress = function setProgress(progress, transition, callback) {
+    return this._position.set(progress * this._cachedLength, transition, callback);
+};
+
+/**
+ * Gets the progress (between 0 and 1) for the content's displacement
+ *
+ * @method getProgress
+ * @return position {Number} position
+ */
+DrawerLayout.prototype.getProgress = function getProgress() {
+    return this._position.get() / this._cachedLength;
+};
+
+/**
+ * Toggles between open and closed states
+ *
+ * @method toggle
+ * @param [transition] {Boolean|Object} transition definition
+ */
+DrawerLayout.prototype.toggle = function toggle(transition) {
+    if (this._isOpen) this.close(transition);
+    else this.open(transition);
+};
+
+/**
+ * Resets to last state of being open or closed
+ *
+ * @method reset
+ * @param [transition] {Boolean|Object} transition definition
+ */
+DrawerLayout.prototype.reset = function reset(transition) {
+    if (this._isOpen) this.open(transition);
+    else this.close(transition);
+};
+
+/**
+ * Returns if drawer is committed to being open or closed
+ *
+ * @method isOpen
+ * @return {Boolean}
+ */
+DrawerLayout.prototype.isOpen = function isOpen(transition) {
+    return this._isOpen;
+};
+
+/**
+ * Generates a Render Spec from the contents of this component
+ *
+ * @private
+ * @method render
+ * @return {Spec}
+ */
+DrawerLayout.prototype.render = function render() {
+    var position = this.getPosition();
+
+    // clamp transition on close
+    if (!this._isOpen && (position < 0 && this._orientation === 1) || (position > 0 && this._orientation === -1)) {
+        position = 0;
+        this.setPosition(position);
+    }
+
+    var contentTransform = (this._direction === DIRECTION_X)
+        ? Transform.translate(position, 0, 0)
+        : Transform.translate(0, position, 0);
+
+    return [
+        {
+            transform : Transform.behind,
+            target: this.drawer.render()
+        },
+        {
+            transform: contentTransform,
+            target: this.content.render()
+        }
+    ];
+};
+
+module.exports = DrawerLayout;
+},{"../core/EventHandler":7,"../core/OptionsManager":10,"../core/RenderNode":11,"../core/Transform":15,"../transitions/Transitionable":88}],100:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -14778,7 +15752,7 @@ EdgeSwapper.prototype.commit = function commit(context) {
 };
 
 module.exports = EdgeSwapper;
-},{"../core/Entity":4,"../core/EventHandler":6,"../core/Transform":14,"../transitions/CachedMap":82,"./RenderController":104}],99:[function(_dereq_,module,exports){
+},{"../core/Entity":5,"../core/EventHandler":7,"../core/Transform":15,"../transitions/CachedMap":83,"./RenderController":106}],101:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -14814,9 +15788,9 @@ function FlexibleLayout(options) {
 
     this._ratios = new Transitionable(this.options.ratios);
     this._nodes = [];
+    this._size = [0, 0];
 
     this._cachedDirection = null;
-    this._cachedTotalLength = false;
     this._cachedLengths = [];
     this._cachedTransforms = null;
     this._ratiosDirty = false;
@@ -14875,6 +15849,17 @@ function _reflow(ratios, length, direction) {
     }
 }
 
+function _trueSizedDirty(ratios, direction) {
+    for (var i = 0; i < ratios.length; i++) {
+        if (typeof ratios[i] !== 'number') {
+            if (this._nodes[i].getSize()[direction] !== this._cachedLengths[i])
+                return true;
+        }
+    }
+
+    return false;
+}
+
 /**
  * Generate a render spec from the contents of this component.
  *
@@ -14929,6 +15914,17 @@ FlexibleLayout.prototype.setRatios = function setRatios(ratios, transition, call
 };
 
 /**
+ * Gets the size of the context the FlexibleLayout exists within.
+ *
+ * @method getSize
+ *
+ * @return {Array} Size of the FlexibleLayout in pixels [width, height]
+ */
+FlexibleLayout.prototype.getSize = function getSize() {
+    return this._size;
+};
+
+/**
  * Apply changes from this component to the corresponding document element.
  * This includes changes to classes, styles, size, content, opacity, origin,
  * and matrix transforms.
@@ -14941,16 +15937,21 @@ FlexibleLayout.prototype.commit = function commit(context) {
     var parentSize = context.size;
     var parentTransform = context.transform;
     var parentOrigin = context.origin;
+    var parentOpacity = context.opacity;
 
     var ratios = this._ratios.get();
     var direction = this.options.direction;
     var length = parentSize[direction];
     var size;
 
-    if (length !== this._cachedTotalLength || this._ratiosDirty || this._ratios.isActive() || direction !== this._cachedDirection) {
+    if (length !== this._size[direction] || this._ratiosDirty || this._ratios.isActive() || direction !== this._cachedDirection || _trueSizedDirty.call(this, ratios, direction)) {
         _reflow.call(this, ratios, length, direction);
 
-        if (length !== this._cachedTotalLength) this._cachedTotalLength = length;
+        if (length !== this._size[direction]) {
+            this._size[0] = parentSize[0];
+            this._size[1] = parentSize[1];
+        }
+
         if (direction !== this._cachedDirection) this._cachedDirection = direction;
         if (this._ratiosDirty) this._ratiosDirty = false;
     }
@@ -14973,12 +15974,13 @@ FlexibleLayout.prototype.commit = function commit(context) {
     return {
         transform: parentTransform,
         size: parentSize,
+        opacity: parentOpacity,
         target: result
     };
 };
 
 module.exports = FlexibleLayout;
-},{"../core/Entity":4,"../core/EventHandler":6,"../core/OptionsManager":9,"../core/Transform":14,"../transitions/Transitionable":87}],100:[function(_dereq_,module,exports){
+},{"../core/Entity":5,"../core/EventHandler":7,"../core/OptionsManager":10,"../core/Transform":15,"../transitions/Transitionable":88}],102:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -15126,7 +16128,7 @@ Flipper.prototype.render = function render() {
 };
 
 module.exports = Flipper;
-},{"../core/OptionsManager":9,"../core/RenderNode":10,"../core/Transform":14,"../transitions/Transitionable":87}],101:[function(_dereq_,module,exports){
+},{"../core/OptionsManager":10,"../core/RenderNode":11,"../core/Transform":15,"../transitions/Transitionable":88}],103:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -15156,8 +16158,8 @@ var TransitionableTransform = _dereq_('../transitions/TransitionableTransform');
  * @param {Options} [options] An object of configurable options.
  * @param {Array.Number} [options.dimensions=[1, 1]] A two value array which specifies the amount of columns
  * and rows in your Gridlayout instance.
- * @param {Array.Number} [options.cellSize=[250, 250]]  A two-value array which specifies the width and height
- * of each cell in your Gridlayout instance.
+ * @param {Array.Number} [options.gutterSize=[0, 0]] A two-value array which specifies size of the
+ * horizontal and vertical gutters between items in the grid layout.
  * @param {Transition} [options.transition=false] The transiton that controls the Gridlayout instance's reflow.
  */
 function GridLayout(options) {
@@ -15343,7 +16345,7 @@ GridLayout.prototype.commit = function commit(context) {
 };
 
 module.exports = GridLayout;
-},{"../core/Entity":4,"../core/EventHandler":6,"../core/Modifier":8,"../core/OptionsManager":9,"../core/RenderNode":10,"../core/Transform":14,"../core/ViewSequence":16,"../transitions/Transitionable":87,"../transitions/TransitionableTransform":88}],102:[function(_dereq_,module,exports){
+},{"../core/Entity":5,"../core/EventHandler":7,"../core/Modifier":9,"../core/OptionsManager":10,"../core/RenderNode":11,"../core/Transform":15,"../core/ViewSequence":17,"../transitions/Transitionable":88,"../transitions/TransitionableTransform":89}],104:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -15497,7 +16499,7 @@ HeaderFooterLayout.prototype.commit = function commit(context) {
 };
 
 module.exports = HeaderFooterLayout;
-},{"../core/Entity":4,"../core/OptionsManager":9,"../core/RenderNode":10,"../core/Transform":14}],103:[function(_dereq_,module,exports){
+},{"../core/Entity":5,"../core/OptionsManager":10,"../core/RenderNode":11,"../core/Transform":15}],105:[function(_dereq_,module,exports){
 var Transform = _dereq_('../core/Transform');
 var Modifier = _dereq_('../core/Modifier');
 var RenderNode = _dereq_('../core/RenderNode');
@@ -15525,9 +16527,15 @@ var TransitionableTransform = _dereq_('../transitions/TransitionableTransform');
  * @param {Array<Number>} [options.inOrigin] A two value array of numbers between one and zero that defines the state of a shown renderables
  * origin upon intially being transitioned in.
  * @param {Array<Number>} [options.outOrigin] A two value array of numbers between one and zero that defines the state of a shown renderable
- * once fully hidden.
+ * origin once fully hidden.
  * @param {Array<Number>} [options.showOrigin] A two value array of numbers between one and zero that defines the state of a shown renderables
  * origin upon succesfully being shown.
+ * @param {Array<Number>} [options.inAlign] A two value array of numbers between one and zero that defines the state of a shown renderables
+ * align upon intially being transitioned in.
+ * @param {Array<Number>} [options.outAlign] A two value array of numbers between one and zero that defines the state of a shown renderable
+ * align once fully hidden.
+ * @param {Array<Number>} [options.showAlign] A two value array of numbers between one and zero that defines the state of a shown renderables
+ * align upon succesfully being shown.
  * @param {Transition} [options.inTransition=true] The transition in charge of showing a renderable.
  * @param {Transition} [options.outTransition=true]  The transition in charge of removing your previous renderable when
  * you show a new one, or hiding your current renderable.
@@ -15551,12 +16559,15 @@ Lightbox.DEFAULT_OPTIONS = {
     inTransform: Transform.scale(0.001, 0.001, 0.001),
     inOpacity: 0,
     inOrigin: [0.5, 0.5],
+    inAlign: [0.5, 0.5],
     outTransform: Transform.scale(0.001, 0.001, 0.001),
     outOpacity: 0,
     outOrigin: [0.5, 0.5],
+    outAlign: [0.5, 0.5],
     showTransform: Transform.identity,
     showOpacity: 1,
     showOrigin: [0.5, 0.5],
+    showAlign: [0.5, 0.5],
     inTransition: true,
     outTransition: true,
     overlap: false
@@ -15602,13 +16613,15 @@ Lightbox.prototype.show = function show(renderable, transition, callback) {
     var stateItem = {
         transform: new TransitionableTransform(this.options.inTransform),
         origin: new Transitionable(this.options.inOrigin),
+        align: new Transitionable(this.options.inAlign),
         opacity: new Transitionable(this.options.inOpacity)
     };
 
     var transform = new Modifier({
         transform: stateItem.transform,
         opacity: stateItem.opacity,
-        origin: stateItem.origin
+        origin: stateItem.origin,
+        align: stateItem.align
     });
     var node = new RenderNode();
     node.add(transform).add(renderable);
@@ -15622,6 +16635,7 @@ Lightbox.prototype.show = function show(renderable, transition, callback) {
     stateItem.transform.set(this.options.showTransform, transition, _cb);
     stateItem.opacity.set(this.options.showOpacity, transition, _cb);
     stateItem.origin.set(this.options.showOrigin, transition, _cb);
+    stateItem.align.set(this.options.showAlign, transition, _cb);
 };
 
 /**
@@ -15654,6 +16668,7 @@ Lightbox.prototype.hide = function hide(transition, callback) {
     stateItem.transform.set(this.options.outTransform, transition, _cb);
     stateItem.opacity.set(this.options.outOpacity, transition, _cb);
     stateItem.origin.set(this.options.outOrigin, transition, _cb);
+    stateItem.align.set(this.options.outAlign, transition, _cb);
 };
 
 /**
@@ -15672,7 +16687,7 @@ Lightbox.prototype.render = function render() {
 };
 
 module.exports = Lightbox;
-},{"../core/Modifier":8,"../core/OptionsManager":9,"../core/RenderNode":10,"../core/Transform":14,"../transitions/Transitionable":87,"../transitions/TransitionableTransform":88,"../utilities/Utility":94}],104:[function(_dereq_,module,exports){
+},{"../core/Modifier":9,"../core/OptionsManager":10,"../core/RenderNode":11,"../core/Transform":15,"../transitions/Transitionable":88,"../transitions/TransitionableTransform":89,"../utilities/Utility":95}],106:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -15796,7 +16811,7 @@ RenderController.prototype.inOriginFrom = function inOriginFrom(origin) {
 
 /**
  * outTransformFrom sets the accessor for the state of the transform used in transitioning out renderables.
- * @method show
+ * @method outTransformFrom
  * @param {Function|Transitionable} transform  A function that returns a transform from outside closure, or a
  * a transitionable that manages a full transform (a sixteen value array).
  * @chainable
@@ -15804,14 +16819,14 @@ RenderController.prototype.inOriginFrom = function inOriginFrom(origin) {
 RenderController.prototype.outTransformFrom = function outTransformFrom(transform) {
     if (transform instanceof Function) this.outTransformMap = transform;
     else if (transform && transform.get) this.outTransformMap = transform.get.bind(transform);
-    else throw new Error('inTransformFrom takes only function or getter object');
+    else throw new Error('outTransformFrom takes only function or getter object');
     //TODO: tween transition
     return this;
 };
 
 /**
  * outOpacityFrom sets the accessor for the state of the opacity used in transitioning out renderables.
- * @method inOpacityFrom
+ * @method outOpacityFrom
  * @param {Function|Transitionable} opacity  A function that returns an opacity from outside closure, or a
  * a transitionable that manages opacity (a number between zero and one).
  * @chainable
@@ -15819,14 +16834,14 @@ RenderController.prototype.outTransformFrom = function outTransformFrom(transfor
 RenderController.prototype.outOpacityFrom = function outOpacityFrom(opacity) {
     if (opacity instanceof Function) this.outOpacityMap = opacity;
     else if (opacity && opacity.get) this.outOpacityMap = opacity.get.bind(opacity);
-    else throw new Error('inOpacityFrom takes only function or getter object');
+    else throw new Error('outOpacityFrom takes only function or getter object');
     //TODO: tween opacity
     return this;
 };
 
 /**
  * outOriginFrom sets the accessor for the state of the origin used in transitioning out renderables.
- * @method inOriginFrom
+ * @method outOriginFrom
  * @param {Function|Transitionable} origin A function that returns an origin from outside closure, or a
  * a transitionable that manages origin (a two value array of numbers between zero and one).
  * @chainable
@@ -15834,7 +16849,7 @@ RenderController.prototype.outOpacityFrom = function outOpacityFrom(opacity) {
 RenderController.prototype.outOriginFrom = function outOriginFrom(origin) {
     if (origin instanceof Function) this.outOriginMap = origin;
     else if (origin && origin.get) this.outOriginMap = origin.get.bind(origin);
-    else throw new Error('inOriginFrom takes only function or getter object');
+    else throw new Error('outOriginFrom takes only function or getter object');
     //TODO: tween origin
     return this;
 };
@@ -15973,7 +16988,7 @@ RenderController.prototype.render = function render() {
 };
 
 module.exports = RenderController;
-},{"../core/Modifier":8,"../core/RenderNode":10,"../core/Transform":14,"../core/View":15,"../transitions/Transitionable":87}],105:[function(_dereq_,module,exports){
+},{"../core/Modifier":9,"../core/RenderNode":11,"../core/Transform":15,"../core/View":16,"../transitions/Transitionable":88}],107:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -16011,16 +17026,23 @@ function ScrollContainer(options) {
 
     this.container.add(this.scrollview);
 
-    EventHandler.setInputHandler(this, this.scrollview);
-    EventHandler.setOutputHandler(this, this.scrollview);
-    this.scrollview.subscribe(this.container);
+    this._eventInput = new EventHandler();
+    EventHandler.setInputHandler(this, this._eventInput);
+
+    this._eventInput.pipe(this.scrollview);
+
+    this._eventOutput = new EventHandler();
+    EventHandler.setOutputHandler(this, this._eventOutput);
+
+    this.container.pipe(this._eventOutput);
+    this.scrollview.pipe(this._eventOutput);
 }
 
 ScrollContainer.DEFAULT_OPTIONS = {
     container: {
         properties: {overflow : 'hidden'}
     },
-    scrollview: {direction: Utility.Direction.X}
+    scrollview: {}
 };
 
 /**
@@ -16044,6 +17066,16 @@ ScrollContainer.prototype.sequenceFrom = function sequenceFrom() {
 };
 
 /**
+ * Returns the width and the height of the ScrollContainer instance.
+ *
+ * @method getSize
+ * @return {Array} A two value array of the ScrollContainer instance's current width and height (in that order).
+ */
+ScrollContainer.prototype.getSize = function getSize() {
+    return this.container.getSize.apply(this.container, arguments);
+};
+
+/**
  * Generate a render spec from the contents of this component.
  *
  * @private
@@ -16051,11 +17083,11 @@ ScrollContainer.prototype.sequenceFrom = function sequenceFrom() {
  * @return {number} Render spec for this component
  */
 ScrollContainer.prototype.render = function render() {
-    return this.container.render.apply(this.container, arguments);
+    return this.container.render();
 };
 
 module.exports = ScrollContainer;
-},{"../core/EventHandler":6,"../core/OptionsManager":9,"../surfaces/ContainerSurface":74,"../utilities/Utility":94,"./Scrollview":107}],106:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7,"../core/OptionsManager":10,"../surfaces/ContainerSurface":75,"../utilities/Utility":95,"./Scrollview":109}],108:[function(_dereq_,module,exports){
 var Entity = _dereq_('../core/Entity');
 var Group = _dereq_('../core/Group');
 var OptionsManager = _dereq_('../core/OptionsManager');
@@ -16118,9 +17150,11 @@ Scroller.DEFAULT_OPTIONS = {
     groupScroll: false
 };
 
+var EDGE_TOLERANCE = 0; //slop for detecting passing the edge
+
 function _sizeForDir(size) {
     if (!size) size = this._contextSize;
-    var dimension = (this.options.direction === Utility.Direction.X) ? 0 : 1;
+    var dimension = this.options.direction;
     return (size[dimension] === undefined) ? this._contextSize[dimension] : size[dimension];
 }
 
@@ -16132,9 +17166,23 @@ function _output(node, offset, target) {
 }
 
 function _getClipSize() {
-    if (this.options.clipSize) return this.options.clipSize;
-    else return _sizeForDir.call(this, this._contextSize);
+    if (this.options.clipSize !== undefined) return this.options.clipSize;
+    if (this._contextSize[this.options.direction] > this.getCumulativeSize()[this.options.direction]) {
+        return _sizeForDir.call(this, this.getCumulativeSize());
+    } else {
+        return _sizeForDir.call(this, this._contextSize);
+    }
 }
+
+/**
+* Returns the cumulative size of the renderables in the view sequence
+* @method getCumulativeSize
+* @return {array} a two value array of the view sequence's cumulative size up to the index.
+*/
+Scroller.prototype.getCumulativeSize = function(index) {
+    if (index === undefined) index = this._node._.cumulativeSizes.length - 1;
+    return this._node._.getSize(index);
+};
 
 /**
  * Patches the Scroller instance's options with the passed-in ones.
@@ -16142,14 +17190,13 @@ function _getClipSize() {
  * @param {Options} options An object of configurable options for the Scroller instance.
  */
 Scroller.prototype.setOptions = function setOptions(options) {
+    if (options.groupScroll !== this.options.groupScroll) {
+        if (options.groupScroll)
+            this.group.pipe(this._eventOutput);
+        else
+            this.group.unpipe(this._eventOutput);
+    }
     this._optionsManager.setOptions(options);
-
-    if (this.options.groupScroll) {
-      this.group.pipe(this._eventOutput);
-    }
-    else {
-      this.group.unpipe(this._eventOutput);
-    }
 };
 
 /**
@@ -16204,7 +17251,7 @@ Scroller.prototype.positionFrom = function positionFrom(position) {
  * Sets the collection of renderables under the Scroller instance's control.
  *
  * @method sequenceFrom
- * @param {Array|ViewSequence} items Either an array of renderables or a Famous viewSequence.
+ * @param node {Array|ViewSequence} Either an array of renderables or a Famous viewSequence.
  * @chainable
  */
 Scroller.prototype.sequenceFrom = function sequenceFrom(node) {
@@ -16278,30 +17325,10 @@ Scroller.prototype.commit = function commit(context) {
     };
 };
 
-function _normalizeState() {
-    var nodeSize = _sizeForDir.call(this, this._node.getSize());
-    var nextNode = this._node && this._node.getNext ? this._node.getNext() : null;
-    while (nextNode && this._position + this._positionOffset >= nodeSize) {
-        this._positionOffset -= nodeSize;
-        this._node = nextNode;
-        nodeSize = _sizeForDir.call(this, this._node.getSize());
-        nextNode = this._node && this._node.getNext ? this._node.getNext() : null;
-    }
-    var prevNode = this._node && this._node.getPrevious ? this._node.getPrevious() : null;
-    while (prevNode && this._position + this._positionOffset < 0) {
-        var prevNodeSize = _sizeForDir.call(this, prevNode.getSize());
-        this._positionOffset += prevNodeSize;
-        this._node = prevNode;
-        prevNode = this._node && this._node.getPrevious ? this._node.getPrevious() : null;
-    }
-}
-
 function _innerRender() {
     var size = null;
     var position = this._position;
     var result = [];
-
-    this._onEdge = 0;
 
     var offset = -this._positionOffset;
     var clipSize = _getClipSize.call(this);
@@ -16325,19 +17352,27 @@ function _innerRender() {
         }
     }
 
-    var edgeSize = (nodesSize !== undefined && nodesSize < clipSize) ? nodesSize : clipSize;
-
-    if (!currNode && offset - position <= edgeSize) {
-        this._onEdge = 1;
-        this._eventOutput.emit('edgeHit', {
-            position: offset - edgeSize
-        });
+    if (!currNode && offset - position < clipSize - EDGE_TOLERANCE) {
+        if (this._onEdge !== 1){
+            this._onEdge = 1;
+            this._eventOutput.emit('onEdge', {
+                position: offset - clipSize
+            });
+        }
     }
-    else if (!this._node.getPrevious() && position <= 0) {
-        this._onEdge = -1;
-        this._eventOutput.emit('edgeHit', {
-            position: 0
-        });
+    else if (!this._node.getPrevious() && position < -EDGE_TOLERANCE) {
+        if (this._onEdge !== -1) {
+            this._onEdge = -1;
+            this._eventOutput.emit('onEdge', {
+                position: 0
+            });
+        }
+    }
+    else {
+        if (this._onEdge !== 0){
+            this._onEdge = 0;
+            this._eventOutput.emit('offEdge');
+        }
     }
 
     // backwards
@@ -16348,7 +17383,7 @@ function _innerRender() {
         offset -= _sizeForDir.call(this, size);
     }
 
-    while (currNode && ((offset - position) > -(_getClipSize.call(this) + this.options.margin))) {
+    while (currNode && ((offset - position) > -(clipSize + this.options.margin))) {
         _output.call(this, currNode, offset, result);
         currNode = currNode.getPrevious ? currNode.getPrevious() : null;
         if (currNode) {
@@ -16357,12 +17392,11 @@ function _innerRender() {
         }
     }
 
-    _normalizeState.call(this);
     return result;
 }
 
 module.exports = Scroller;
-},{"../core/Entity":4,"../core/EventHandler":6,"../core/Group":7,"../core/OptionsManager":9,"../core/Transform":14,"../core/ViewSequence":16,"../utilities/Utility":94}],107:[function(_dereq_,module,exports){
+},{"../core/Entity":5,"../core/EventHandler":7,"../core/Group":8,"../core/OptionsManager":10,"../core/Transform":15,"../core/ViewSequence":17,"../utilities/Utility":95}],109:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -16385,6 +17419,23 @@ var GenericSync = _dereq_('../inputs/GenericSync');
 var ScrollSync = _dereq_('../inputs/ScrollSync');
 var TouchSync = _dereq_('../inputs/TouchSync');
 GenericSync.register({scroll : ScrollSync, touch : TouchSync});
+
+/** @const */
+var TOLERANCE = 0.5;
+
+/** @enum */
+var SpringStates = {
+    NONE: 0,
+    EDGE: 1,
+    PAGE: 2
+};
+
+/** @enum */
+var EdgeStates = {
+    TOP:   -1,
+    NONE:   0,
+    BOTTOM: 1
+};
 
 /**
  * Scrollview will lay out a collection of renderables sequentially in the specified direction, and will
@@ -16420,22 +17471,61 @@ GenericSync.register({scroll : ScrollSync, touch : TouchSync});
  * @param {Number} [speedLimit=10] The highest scrolling speed you can reach.
  */
 function Scrollview(options) {
+    // patch options with defaults
     this.options = Object.create(Scrollview.DEFAULT_OPTIONS);
     this._optionsManager = new OptionsManager(this.options);
 
-    this._node = null;
+    // create sub-components
+    this._scroller = new Scroller(this.options);
+
+    this.sync = new GenericSync(
+        ['scroll', 'touch'],
+        {
+            direction : this.options.direction,
+            scale : this.options.syncScale,
+            rails: this.options.rails,
+            preventDefault: this.options.preventDefault !== undefined
+                ? this.options.preventDefault
+                : this.options.direction !== Utility.Direction.Y
+        }
+    );
 
     this._physicsEngine = new PhysicsEngine();
     this._particle = new Particle();
     this._physicsEngine.addBody(this._particle);
 
-    this.spring = new Spring({anchor: [0, 0, 0]});
+    this.spring = new Spring({
+        anchor: [0, 0, 0],
+        period: this.options.edgePeriod,
+        dampingRatio: this.options.edgeDamp
+    });
+    this.drag = new Drag({
+        forceFunction: Drag.FORCE_FUNCTIONS.QUADRATIC,
+        strength: this.options.drag
+    });
+    this.friction = new Drag({
+        forceFunction: Drag.FORCE_FUNCTIONS.LINEAR,
+        strength: this.options.friction
+    });
 
-    this.drag = new Drag({forceFunction: Drag.FORCE_FUNCTIONS.QUADRATIC});
-    this.friction = new Drag({forceFunction: Drag.FORCE_FUNCTIONS.LINEAR});
+    // state
+    this._node = null;
+    this._touchCount = 0;
+    this._springState = SpringStates.NONE;
+    this._onEdge = EdgeStates.NONE;
+    this._pageSpringPosition = 0;
+    this._edgeSpringPosition = 0;
+    this._touchVelocity = 0;
+    this._earlyEnd = false;
+    this._needsPaginationCheck = false;
+    this._displacement = 0;
+    this._totalShift = 0;
+    this._cachedIndex = 0;
 
-    this.sync = new GenericSync(['scroll', 'touch'], {direction : this.options.direction});
+    // subcomponent logic
+    this._scroller.positionFrom(this.getPosition.bind(this));
 
+    // eventing
     this._eventInput = new EventHandler();
     this._eventOutput = new EventHandler();
 
@@ -16445,32 +17535,18 @@ function Scrollview(options) {
     EventHandler.setInputHandler(this, this._eventInput);
     EventHandler.setOutputHandler(this, this._eventOutput);
 
-    this._touchCount = 0;
-    this._springState = 0;
-    this._onEdge = 0; // -1 for top, 1 for bottom
-    this._pageSpringPosition = 0;
-    this._edgeSpringPosition = 0;
-    this._touchVelocity = undefined;
-    this._earlyEnd = false;
-    this._needsPaginationCheck = false;
-
-    this._scroller = new Scroller();
-    this._scroller.positionFrom(this.getPosition.bind(this));
-
-    this.setOptions(options);
-
     _bindEvents.call(this);
-}
 
-/** @const */
-var TOLERANCE = 0.5;
+    // override default options with passed-in custom options
+    if (options) this.setOptions(options);
+}
 
 Scrollview.DEFAULT_OPTIONS = {
     direction: Utility.Direction.Y,
     rails: true,
-    friction: 0.001,
+    friction: 0.005,
     drag: 0.0001,
-    edgeGrip: 0.5,
+    edgeGrip: 0.2,
     edgePeriod: 300,
     edgeDamp: 1,
     margin: 1000,       // mostly safe
@@ -16479,15 +17555,9 @@ Scrollview.DEFAULT_OPTIONS = {
     pageDamp: 0.8,
     pageStopSpeed: 10,
     pageSwitchSpeed: 0.5,
-    speedLimit: 10,
-    groupScroll: false
-};
-
-/** @enum */
-var SpringStates = {
-    NONE: 0,
-    EDGE: 1,
-    PAGE: 2
+    speedLimit: 5,
+    groupScroll: false,
+    syncScale: 1
 };
 
 function _handleStart(event) {
@@ -16495,6 +17565,7 @@ function _handleStart(event) {
     if (event.count === undefined) this._touchCount = 1;
 
     _detachAgents.call(this);
+
     this.setVelocity(0);
     this._touchVelocity = 0;
     this._earlyEnd = false;
@@ -16504,8 +17575,8 @@ function _handleMove(event) {
     var velocity = -event.velocity;
     var delta = -event.delta;
 
-    if (this._onEdge && event.slip) {
-        if ((velocity < 0 && this._onEdge < 0) || (velocity > 0 && this._onEdge > 0)) {
+    if (this._onEdge !== EdgeStates.NONE && event.slip) {
+        if ((velocity < 0 && this._onEdge === EdgeStates.TOP) || (velocity > 0 && this._onEdge === EdgeStates.BOTTOM)) {
             if (!this._earlyEnd) {
                 _handleEnd.call(this, event);
                 this._earlyEnd = true;
@@ -16518,15 +17589,29 @@ function _handleMove(event) {
     if (this._earlyEnd) return;
     this._touchVelocity = velocity;
 
-    if (event.slip) this.setVelocity(velocity);
-    else this.setPosition(this.getPosition() + delta);
+    if (event.slip) {
+        var speedLimit = this.options.speedLimit;
+        if (velocity < -speedLimit) velocity = -speedLimit;
+        else if (velocity > speedLimit) velocity = speedLimit;
+
+        this.setVelocity(velocity);
+
+        var deltaLimit = speedLimit * 16;
+        if (delta > deltaLimit) delta = deltaLimit;
+        else if (delta < -deltaLimit) delta = -deltaLimit;
+    }
+
+    this.setPosition(this.getPosition() + delta);
+    this._displacement += delta;
+
+    if (this._springState === SpringStates.NONE) _normalizeState.call(this);
 }
 
 function _handleEnd(event) {
     this._touchCount = event.count || 0;
     if (!this._touchCount) {
         _detachAgents.call(this);
-        if (this._onEdge) _setSpring.call(this, this._edgeSpringPosition, SpringStates.EDGE);
+        if (this._onEdge !== EdgeStates.NONE) _setSpring.call(this, this._edgeSpringPosition, SpringStates.EDGE);
         _attachAgents.call(this);
         var velocity = -event.velocity;
         var speedLimit = this.options.speedLimit;
@@ -16534,7 +17619,7 @@ function _handleEnd(event) {
         if (velocity < -speedLimit) velocity = -speedLimit;
         else if (velocity > speedLimit) velocity = speedLimit;
         this.setVelocity(velocity);
-        this._touchVelocity = undefined;
+        this._touchVelocity = 0;
         this._needsPaginationCheck = true;
     }
 }
@@ -16545,8 +17630,30 @@ function _bindEvents() {
     this._eventInput.on('update', _handleMove);
     this._eventInput.on('end', _handleEnd);
 
-    this._scroller.on('edgeHit', function(data) {
+    this._eventInput.on('resize', function() {
+        this._node._.calculateSize();
+    }.bind(this));
+
+    this._scroller.on('onEdge', function(data) {
         this._edgeSpringPosition = data.position;
+        _handleEdge.call(this, this._scroller.onEdge());
+        this._eventOutput.emit('onEdge');
+    }.bind(this));
+
+    this._scroller.on('offEdge', function() {
+        this.sync.setOptions({scale: this.options.syncScale});
+        this._onEdge = this._scroller.onEdge();
+        this._eventOutput.emit('offEdge');
+    }.bind(this));
+
+    this._particle.on('update', function(particle) {
+        if (this._springState === SpringStates.NONE) _normalizeState.call(this);
+        this._displacement = particle.position.x - this._totalShift;
+    }.bind(this));
+
+    this._particle.on('end', function() {
+        if (!this.options.paginated || (this.options.paginated && this._springState !== SpringStates.NONE))
+            this._eventOutput.emit('settle');
     }.bind(this));
 }
 
@@ -16562,32 +17669,26 @@ function _detachAgents() {
 
 function _nodeSizeForDirection(node) {
     var direction = this.options.direction;
-    var nodeSize = (node.getSize() || this._scroller.getSize())[direction];
-    if (!nodeSize) nodeSize = this._scroller.getSize()[direction];
-    return nodeSize;
+    var nodeSize = node.getSize();
+    return (!nodeSize) ? this._scroller.getSize()[direction] : nodeSize[direction];
 }
 
-function _handleEdge(edgeDetected) {
-    if (!this._onEdge && edgeDetected) {
-        this.sync.setOptions({scale: this.options.edgeGrip});
-        if (!this._touchCount && this._springState !== SpringStates.EDGE) {
-            _setSpring.call(this, this._edgeSpringPosition, SpringStates.EDGE);
-        }
+function _handleEdge(edge) {
+    this.sync.setOptions({scale: this.options.edgeGrip});
+    this._onEdge = edge;
+
+    if (!this._touchCount && this._springState !== SpringStates.EDGE) {
+        _setSpring.call(this, this._edgeSpringPosition, SpringStates.EDGE);
     }
-    else if (this._onEdge && !edgeDetected) {
-        this.sync.setOptions({scale: 1});
-        if (this._springState && Math.abs(this.getVelocity()) < 0.001) {
-            // reset agents, detaching the spring
-            _detachAgents.call(this);
-            _attachAgents.call(this);
-        }
+
+    if (this._springState && Math.abs(this.getVelocity()) < 0.001) {
+        // reset agents, detaching the spring
+        _detachAgents.call(this);
+        _attachAgents.call(this);
     }
-    this._onEdge = edgeDetected;
 }
 
 function _handlePagination() {
-    if (!this._needsPaginationCheck) return;
-
     if (this._touchCount) return;
     if (this._springState === SpringStates.EDGE) return;
 
@@ -16600,12 +17701,20 @@ function _handlePagination() {
     // parameters to determine when to switch
     var nodeSize = _nodeSizeForDirection.call(this, this._node);
     var positionNext = position > 0.5 * nodeSize;
-    var velocityNext = velocity > 0;
+    var positionPrev = position < 0.5 * nodeSize;
 
-    if ((positionNext && !velocitySwitch) || (velocitySwitch && velocityNext)) this.goToNextPage();
-    else _setSpring.call(this, 0, SpringStates.PAGE);
+    var velocityNext = velocity > 0;
+    var velocityPrev = velocity < 0;
 
     this._needsPaginationCheck = false;
+
+    if ((positionNext && !velocitySwitch) || (velocitySwitch && velocityNext)) {
+        this.goToNextPage();
+    }
+    else if (velocitySwitch && velocityPrev) {
+        this.goToPreviousPage();
+    }
+    else _setSpring.call(this, 0, SpringStates.PAGE);
 }
 
 function _setSpring(position, springState) {
@@ -16637,13 +17746,16 @@ function _setSpring(position, springState) {
 }
 
 function _normalizeState() {
+    var offset = 0;
+
     var position = this.getPosition();
+    position += (position < 0 ? -0.5 : 0.5) >> 0;
+
     var nodeSize = _nodeSizeForDirection.call(this, this._node);
     var nextNode = this._node.getNext();
 
-    while (position > nodeSize + TOLERANCE && nextNode) {
-        _shiftOrigin.call(this, -nodeSize);
-        position -= nodeSize;
+    while (offset + position >= nodeSize && nextNode) {
+        offset -= nodeSize;
         this._scroller.sequenceFrom(nextNode);
         this._node = nextNode;
         nextNode = this._node.getNext();
@@ -16653,13 +17765,28 @@ function _normalizeState() {
     var previousNode = this._node.getPrevious();
     var previousNodeSize;
 
-    while (position < -TOLERANCE && previousNode) {
+    while (offset + position <= 0 && previousNode) {
         previousNodeSize = _nodeSizeForDirection.call(this, previousNode);
         this._scroller.sequenceFrom(previousNode);
         this._node = previousNode;
-        _shiftOrigin.call(this, previousNodeSize);
-        position += previousNodeSize;
+        offset += previousNodeSize;
         previousNode = this._node.getPrevious();
+    }
+
+    if (offset) _shiftOrigin.call(this, offset);
+
+    if (this._node) {
+        if (this._node.index !== this._cachedIndex) {
+            if (this.getPosition() < 0.5 * nodeSize) {
+                this._cachedIndex = this._node.index;
+                this._eventOutput.emit('pageChange', {direction: -1, index: this._cachedIndex});
+            }
+        } else {
+            if (this.getPosition() > 0.5 * nodeSize) {
+                this._cachedIndex = this._node.index + 1;
+                this._eventOutput.emit('pageChange', {direction: 1, index: this._cachedIndex});
+            }
+        }
     }
 }
 
@@ -16667,6 +17794,8 @@ function _shiftOrigin(amount) {
     this._edgeSpringPosition += amount;
     this._pageSpringPosition += amount;
     this.setPosition(this.getPosition() + amount);
+    this._totalShift += amount;
+
     if (this._springState === SpringStates.EDGE) {
         this.spring.setOptions({anchor: [this._edgeSpringPosition, 0, 0]});
     }
@@ -16675,6 +17804,82 @@ function _shiftOrigin(amount) {
     }
 }
 
+/**
+ * Returns the index of the first visible renderable
+ *
+ * @method getCurrentIndex
+ * @return {Number} The current index of the ViewSequence
+ */
+Scrollview.prototype.getCurrentIndex = function getCurrentIndex() {
+    return this._node.index;
+};
+
+/**
+ * goToPreviousPage paginates your Scrollview instance backwards by one item.
+ *
+ * @method goToPreviousPage
+ * @return {ViewSequence} The previous node.
+ */
+Scrollview.prototype.goToPreviousPage = function goToPreviousPage() {
+    if (!this._node || this._onEdge === EdgeStates.TOP) return null;
+
+    // if moving back to the current node
+    if (this.getPosition() > 1 && this._springState === SpringStates.NONE) {
+        _setSpring.call(this, 0, SpringStates.PAGE);
+        return this._node;
+    }
+
+    // if moving to the previous node
+    var previousNode = this._node.getPrevious();
+    if (previousNode) {
+        var previousNodeSize = _nodeSizeForDirection.call(this, previousNode);
+        this._scroller.sequenceFrom(previousNode);
+        this._node = previousNode;
+        _shiftOrigin.call(this, previousNodeSize);
+        _setSpring.call(this, 0, SpringStates.PAGE);
+    }
+    return previousNode;
+};
+
+/**
+ * goToNextPage paginates your Scrollview instance forwards by one item.
+ *
+ * @method goToNextPage
+ * @return {ViewSequence} The next node.
+ */
+Scrollview.prototype.goToNextPage = function goToNextPage() {
+    if (!this._node || this._onEdge === EdgeStates.BOTTOM) return null;
+    var nextNode = this._node.getNext();
+    if (nextNode) {
+        var currentNodeSize = _nodeSizeForDirection.call(this, this._node);
+        this._scroller.sequenceFrom(nextNode);
+        this._node = nextNode;
+        _shiftOrigin.call(this, -currentNodeSize);
+        _setSpring.call(this, 0, SpringStates.PAGE);
+    }
+    return nextNode;
+};
+
+/**
+ * Paginates the Scrollview to an absolute page index.
+ *
+ * @method goToPage
+ */
+Scrollview.prototype.goToPage = function goToPage(index) {
+    var currentIndex = this.getCurrentIndex();
+    var i;
+
+    if (currentIndex > index) {
+        for (i = 0; i < currentIndex - index; i++)
+            this.goToPreviousPage();
+    }
+
+    if (currentIndex < index) {
+        for (i = 0; i < index - currentIndex; i++)
+            this.goToNextPage();
+    }
+};
+
 Scrollview.prototype.outputFrom = function outputFrom() {
     return this._scroller.outputFrom.apply(this._scroller, arguments);
 };
@@ -16682,6 +17887,8 @@ Scrollview.prototype.outputFrom = function outputFrom() {
 /**
  * Returns the position associated with the Scrollview instance's current node
  *  (generally the node currently at the top).
+ *
+ * @deprecated
  * @method getPosition
  * @param {number} [node] If specified, returns the position of the node at that index in the
  * Scrollview instance's currently managed collection.
@@ -16693,7 +17900,32 @@ Scrollview.prototype.getPosition = function getPosition() {
 };
 
 /**
- * Sets position of the physics particle that controls Scrollview instance's "position"
+ * Returns the absolute position associated with the Scrollview instance
+ *
+ * @method getAbsolutePosition
+ * @return {number} The position of the Scrollview's current Node,
+ * in pixels translated.
+ */
+Scrollview.prototype.getAbsolutePosition = function getAbsolutePosition() {
+    return this._scroller.getCumulativeSize(this.getCurrentIndex())[this.options.direction] + this.getPosition();
+};
+
+/**
+ * Returns the offset associated with the Scrollview instance's current node
+ *  (generally the node currently at the top).
+ *
+ * @method getOffset
+ * @param {number} [node] If specified, returns the position of the node at that index in the
+ * Scrollview instance's currently managed collection.
+ * @return {number} The position of either the specified node, or the Scrollview's current Node,
+ * in pixels translated.
+ */
+Scrollview.prototype.getOffset = Scrollview.prototype.getPosition;
+
+/**
+ * Sets the position of the physics particle that controls Scrollview instance's "position"
+ *
+ * @deprecated
  * @method setPosition
  * @param {number} x The amount of pixels you want your scrollview to progress by.
  */
@@ -16702,7 +17934,16 @@ Scrollview.prototype.setPosition = function setPosition(x) {
 };
 
 /**
+ * Sets the offset of the physics particle that controls Scrollview instance's "position"
+ *
+ * @method setPosition
+ * @param {number} x The amount of pixels you want your scrollview to progress by.
+ */
+Scrollview.prototype.setOffset = Scrollview.prototype.setPosition;
+
+/**
  * Returns the Scrollview instance's velocity.
+ *
  * @method getVelocity
  * @return {Number} The velocity.
  */
@@ -16714,6 +17955,7 @@ Scrollview.prototype.getVelocity = function getVelocity() {
 /**
  * Sets the Scrollview instance's velocity. Until affected by input or another call of setVelocity
  *  the Scrollview instance will scroll at the passed-in velocity.
+ *
  * @method setVelocity
  * @param {number} v The magnitude of the velocity.
  */
@@ -16723,81 +17965,51 @@ Scrollview.prototype.setVelocity = function setVelocity(v) {
 
 /**
  * Patches the Scrollview instance's options with the passed-in ones.
+ *
  * @method setOptions
  * @param {Options} options An object of configurable options for the Scrollview instance.
  */
 Scrollview.prototype.setOptions = function setOptions(options) {
-    if (options) {
-        if (options.direction !== undefined) {
-            if (options.direction === 'x') options.direction = Utility.Direction.X;
-            else if (options.direction === 'y') options.direction = Utility.Direction.Y;
-        }
-
-        this._scroller.setOptions(options);
-        this._optionsManager.setOptions(options);
+    // preprocess custom options
+    if (options.direction !== undefined) {
+        if (options.direction === 'x') options.direction = Utility.Direction.X;
+        else if (options.direction === 'y') options.direction = Utility.Direction.Y;
     }
 
-    this._scroller.setOptions(this.options);
-    if (this.options.groupScroll)
-        this._scroller.pipe(this._eventInput);
-    else
-        this._scroller.unpipe(this._eventInput);
-
-    this.drag.setOptions({strength: this.options.drag});
-    this.friction.setOptions({strength: this.options.friction});
-
-    this.spring.setOptions({
-        period: this.options.edgePeriod,
-        dampingRatio: this.options.edgeDamp
-    });
-
-    this.sync.setOptions({
-        rails: this.options.rails,
-        direction: (this.options.direction === Utility.Direction.X) ? GenericSync.DIRECTION_X : GenericSync.DIRECTION_Y
-    });
-};
-
-/**
- * goToPreviousPage paginates your Scrollview instance backwards by one item.
- * @method goToPreviousPage
- * @return {ViewSequence} The previous node.
- */
-Scrollview.prototype.goToPreviousPage = function goToPreviousPage() {
-    if (!this._node) return null;
-    var previousNode = this._node.getPrevious();
-    if (previousNode) {
-        var currentPosition = this.getPosition();
-        var previousNodeSize = _nodeSizeForDirection.call(this, previousNode);
-        this._scroller.sequenceFrom(previousNode);
-        this._node = previousNode;
-        var previousSpringPosition = (currentPosition < TOLERANCE) ? -previousNodeSize : 0;
-        _setSpring.call(this, previousSpringPosition, SpringStates.PAGE);
-        _shiftOrigin.call(this, previousNodeSize);
+    if (options.groupScroll !== this.options.groupScroll) {
+        if (options.groupScroll)
+            this.subscribe(this._scroller);
+        else
+            this.unsubscribe(this._scroller);
     }
-    this._eventOutput.emit('pageChange', {direction: -1});
-    return previousNode;
-};
 
-/**
- * goToNextPage paginates your Scrollview instance forwards by one item.
- * @method goToNextPage
- * @return {ViewSequence} The next node.
- */
-Scrollview.prototype.goToNextPage = function goToNextPage() {
-    if (!this._node) return null;
-    var nextNode = this._node.getNext();
-    if (nextNode) {
-        var currentPosition = this.getPosition();
-        var currentNodeSize = _nodeSizeForDirection.call(this, this._node);
-        var nextNodeSize = _nodeSizeForDirection.call(this, nextNode);
-        this._scroller.sequenceFrom(nextNode);
-        this._node = nextNode;
-        var nextSpringPosition = (currentPosition > currentNodeSize - TOLERANCE) ? currentNodeSize + nextNodeSize : currentNodeSize;
-        _setSpring.call(this, nextSpringPosition, SpringStates.PAGE);
-        _shiftOrigin.call(this, -currentNodeSize);
+    // patch custom options
+    this._optionsManager.setOptions(options);
+
+    // propagate options to sub-components
+
+    // scroller sub-component
+    this._scroller.setOptions(options);
+
+    // physics sub-components
+    if (options.drag !== undefined) this.drag.setOptions({strength: this.options.drag});
+    if (options.friction !== undefined) this.friction.setOptions({strength: this.options.friction});
+    if (options.edgePeriod !== undefined || options.edgeDamp !== undefined) {
+        this.spring.setOptions({
+            period: this.options.edgePeriod,
+            dampingRatio: this.options.edgeDamp
+        });
     }
-    this._eventOutput.emit('pageChange', {direction: 1});
-    return nextNode;
+
+    // sync sub-component
+    if (options.rails || options.direction !== undefined || options.syncScale !== undefined || options.preventDefault) {
+        this.sync.setOptions({
+            rails: this.options.rails,
+            direction: (this.options.direction === Utility.Direction.X) ? GenericSync.DIRECTION_X : GenericSync.DIRECTION_Y,
+            scale: this.options.syncScale,
+            preventDefault: this.options.preventDefault
+        });
+    }
 };
 
 /**
@@ -16810,7 +18022,7 @@ Scrollview.prototype.goToNextPage = function goToNextPage() {
  * @param {Array|ViewSequence} node Either an array of renderables or a Famous viewSequence.
  */
 Scrollview.prototype.sequenceFrom = function sequenceFrom(node) {
-    if (node instanceof Array) node = new ViewSequence({array: node});
+    if (node instanceof Array) node = new ViewSequence({array: node, trackSize: true});
     this._node = node;
     return this._scroller.sequenceFrom(node);
 };
@@ -16833,17 +18045,13 @@ Scrollview.prototype.getSize = function getSize() {
  * @return {number} Render spec for this component
  */
 Scrollview.prototype.render = function render() {
-    if (!this._node) return null;
-
-    _normalizeState.call(this);
-    _handleEdge.call(this, this._scroller.onEdge());
-    if (this.options.paginated) _handlePagination.call(this);
+    if (this.options.paginated && this._needsPaginationCheck) _handlePagination.call(this);
 
     return this._scroller.render();
 };
 
 module.exports = Scrollview;
-},{"../core/EventHandler":6,"../core/OptionsManager":9,"../core/ViewSequence":16,"../inputs/GenericSync":26,"../inputs/ScrollSync":31,"../inputs/TouchSync":32,"../physics/PhysicsEngine":47,"../physics/bodies/Particle":50,"../physics/forces/Drag":62,"../physics/forces/Spring":67,"../utilities/Utility":94,"../views/Scroller":106}],108:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7,"../core/OptionsManager":10,"../core/ViewSequence":17,"../inputs/GenericSync":27,"../inputs/ScrollSync":32,"../inputs/TouchSync":33,"../physics/PhysicsEngine":48,"../physics/bodies/Particle":51,"../physics/forces/Drag":63,"../physics/forces/Spring":68,"../utilities/Utility":95,"../views/Scroller":108}],110:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -16867,31 +18075,21 @@ var Utility = _dereq_('../utilities/Utility');
  * module, this option will lay out the SequentialLayout instance's renderables either horizontally
  * (x) or vertically (y). Utility's direction is essentially either zero (X) or one (Y), so feel free
  * to just use integers as well.
- * @param {Array.Number} [options.defaultItemSize=[50, 50]] In the case where a renderable layed out
- * under SequentialLayout's control doesen't have a getSize method, SequentialLayout will assign it
- * this default size. (Commonly a case with Views).
  */
 function SequentialLayout(options) {
     this._items = null;
     this._size = null;
     this._outputFunction = SequentialLayout.DEFAULT_OUTPUT_FUNCTION;
 
-    this.options = Object.create(this.constructor.DEFAULT_OPTIONS);
+    this.options = Utility.clone(this.constructor.DEFAULT_OPTIONS || SequentialLayout.DEFAULT_OPTIONS);
     this.optionsManager = new OptionsManager(this.options);
-
-    this._itemsCache = [];
-    this._outputCache = {
-        size: null,
-        target: this._itemsCache
-    };
 
     if (options) this.setOptions(options);
 }
 
 SequentialLayout.DEFAULT_OPTIONS = {
     direction: Utility.Direction.Y,
-    itemSpacing: 0,
-    defaultItemSize: [50, 50]
+    itemSpacing: 0
 };
 
 SequentialLayout.DEFAULT_OUTPUT_FUNCTION = function DEFAULT_OUTPUT_FUNCTION(input, offset, index) {
@@ -16960,48 +18158,47 @@ SequentialLayout.prototype.setOutputFunction = function setOutputFunction(output
  * @return {number} Render spec for this component
  */
 SequentialLayout.prototype.render = function render() {
-    var length = 0;
-    var girth = 0;
+    var length             = 0;
+    var secondaryDirection = this.options.direction ^ 1;
+    var currentNode        = this._items;
+    var item               = null;
+    var itemSize           = [];
+    var output             = {};
+    var result             = [];
+    var i                  = 0;
 
-    var lengthDim = (this.options.direction === Utility.Direction.X) ? 0 : 1;
-    var girthDim = (this.options.direction === Utility.Direction.X) ? 1 : 0;
+    this._size = [0, 0];
 
-    var currentNode = this._items;
-    var result = this._itemsCache;
-    var i = 0;
     while (currentNode) {
-        var item = currentNode.get();
+        item = currentNode.get();
         if (!item) break;
 
-        var itemSize;
-        if (item && item.getSize) itemSize = item.getSize();
-        if (!itemSize) itemSize = this.options.defaultItemSize;
-        if (itemSize[girthDim] !== true) girth = Math.max(girth, itemSize[girthDim]);
+        if (item.getSize) itemSize = item.getSize();
 
-        var output = this._outputFunction.call(this, item, length, i);
-        result[i] = output;
+        output = this._outputFunction.call(this, item, length, i++);
+        result.push(output);
 
-        if (itemSize[lengthDim] && (itemSize[lengthDim] !== true)) length += itemSize[lengthDim] + this.options.itemSpacing;
+        if (itemSize) {
+            if (itemSize[this.options.direction]) length += itemSize[this.options.direction];
+            if (itemSize[secondaryDirection] > this._size[secondaryDirection]) this._size[secondaryDirection] = itemSize[secondaryDirection];
+        }
+
         currentNode = currentNode.getNext();
-        i++;
+
+        if (this.options.itemSpacing && currentNode) length += this.options.itemSpacing;
     }
-    this._itemsCache.splice(i);
 
-    if (!girth) girth = undefined;
+    this._size[this.options.direction] = length;
 
-    if (!this._size) this._size = [0, 0];
-    this._size[lengthDim] = length - this.options.itemSpacing; // account for last itemSpacing
-    this._size[girthDim] = girth;
-
-    this._outputCache.size = this.getSize();
-    return this._outputCache;
+    return result;
 };
 
 module.exports = SequentialLayout;
-},{"../core/OptionsManager":9,"../core/Transform":14,"../core/ViewSequence":16,"../utilities/Utility":94}],109:[function(_dereq_,module,exports){
+},{"../core/OptionsManager":10,"../core/Transform":15,"../core/ViewSequence":17,"../utilities/Utility":95}],111:[function(_dereq_,module,exports){
 module.exports = {
   ContextualView: _dereq_('./ContextualView'),
   Deck: _dereq_('./Deck'),
+  DrawerLayout: _dereq_('./DrawerLayout'),
   EdgeSwapper: _dereq_('./EdgeSwapper'),
   FlexibleLayout: _dereq_('./FlexibleLayout'),
   Flipper: _dereq_('./Flipper'),
@@ -17015,7 +18212,7 @@ module.exports = {
   SequentialLayout: _dereq_('./SequentialLayout')
 };
 
-},{"./ContextualView":96,"./Deck":97,"./EdgeSwapper":98,"./FlexibleLayout":99,"./Flipper":100,"./GridLayout":101,"./HeaderFooterLayout":102,"./Lightbox":103,"./RenderController":104,"./ScrollContainer":105,"./Scroller":106,"./Scrollview":107,"./SequentialLayout":108}],110:[function(_dereq_,module,exports){
+},{"./ContextualView":97,"./Deck":98,"./DrawerLayout":99,"./EdgeSwapper":100,"./FlexibleLayout":101,"./Flipper":102,"./GridLayout":103,"./HeaderFooterLayout":104,"./Lightbox":105,"./RenderController":106,"./ScrollContainer":107,"./Scroller":108,"./Scrollview":109,"./SequentialLayout":110}],112:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -17156,7 +18353,7 @@ NavigationBar.prototype.setContent = function setContent(content) {
 };
 
 module.exports = NavigationBar;
-},{"../core/Scene":11,"../core/Surface":13,"../core/Transform":14,"../core/View":15}],111:[function(_dereq_,module,exports){
+},{"../core/Scene":12,"../core/Surface":14,"../core/Transform":15,"../core/View":16}],113:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -17290,7 +18487,7 @@ Slider.prototype.render = function render() {
 };
 
 module.exports = Slider;
-},{"../core/EventHandler":6,"../core/OptionsManager":9,"../core/Surface":13,"../core/Transform":14,"../inputs/GenericSync":26,"../inputs/MouseSync":27,"../inputs/TouchSync":32,"../math/Utilities":39,"../surfaces/CanvasSurface":73}],112:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7,"../core/OptionsManager":10,"../core/Surface":14,"../core/Transform":15,"../inputs/GenericSync":27,"../inputs/MouseSync":28,"../inputs/TouchSync":33,"../math/Utilities":40,"../surfaces/CanvasSurface":74}],114:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -17440,7 +18637,7 @@ TabBar.prototype.select = function select(id) {
 };
 
 module.exports = TabBar;
-},{"../core/View":15,"../utilities/Utility":94,"../views/GridLayout":101,"./ToggleButton":113}],113:[function(_dereq_,module,exports){
+},{"../core/View":16,"../utilities/Utility":95,"../views/GridLayout":103,"./ToggleButton":115}],115:[function(_dereq_,module,exports){
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -17598,7 +18795,7 @@ ToggleButton.prototype.render = function render() {
 };
 
 module.exports = ToggleButton;
-},{"../core/EventHandler":6,"../core/Surface":13,"../views/RenderController":104}],114:[function(_dereq_,module,exports){
+},{"../core/EventHandler":7,"../core/Surface":14,"../views/RenderController":106}],116:[function(_dereq_,module,exports){
 module.exports = {
   NavigationBar: _dereq_('./NavigationBar'),
   Slider: _dereq_('./Slider'),
@@ -17606,6 +18803,5 @@ module.exports = {
   ToggleButton: _dereq_('./ToggleButton')
 };
 
-},{"./NavigationBar":110,"./Slider":111,"./TabBar":112,"./ToggleButton":113}]},{},[22])
-(22)
+},{"./NavigationBar":112,"./Slider":113,"./TabBar":114,"./ToggleButton":115}]},{},[23])(23)
 });
