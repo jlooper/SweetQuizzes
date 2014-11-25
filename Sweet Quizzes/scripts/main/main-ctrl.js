@@ -13,9 +13,7 @@ angular.module('sweetQuizzes')
         var Transitionable = $famous['famous/transitions/Transitionable'];
         var SpringTransition = $famous['famous/transitions/SpringTransition'];
         Transitionable.registerMethod('spring', SpringTransition);
-
-
-        
+       
         $scope.index = 0;
         //sample quiz
         $scope.quizId = 2273151;
@@ -23,8 +21,7 @@ angular.module('sweetQuizzes')
              
 
         var mainContext = Engine.createContext();
-        mainContext.setPerspective(500);
-
+        
         $scope.gridLayoutOptions = {
             dimensions: [2, 1]
         };
@@ -46,7 +43,6 @@ angular.module('sweetQuizzes')
            
                     $scope.clear()
                     $scope.quizData = $scope.reviewQuizData;
-            console.log($scope.quizData)
                     $scope.buildInterface();
                 
         };
@@ -74,8 +70,8 @@ angular.module('sweetQuizzes')
                 
                 $scope.flipper = new Flipper();
                 $scope.centerModifier = new Modifier({
-                      origin: [0.5, 0],
-                      align: [0.5, 0]
+                      origin: [0.5, 0.25],
+                      align: [0.5, 0.25]
                     });
             
                 
@@ -85,7 +81,7 @@ angular.module('sweetQuizzes')
                         properties: {
                             background: '#F09BA2',
                             textAlign: 'center',
-                            border: '5px solid #BDA193',
+                            border: '5px solid #FBC5C5',
                             borderRadius: '10px',
                             padding:'10px'
                         }
@@ -98,7 +94,7 @@ angular.module('sweetQuizzes')
                             background: '#FBC5C5',
                             color: 'black',
                             textAlign: 'center',
-                            border: '5px solid #BDA193',
+                            border: '5px solid #FBC5C5',
                             borderRadius: '10px',
                             padding:'10px'
                         }
@@ -107,24 +103,25 @@ angular.module('sweetQuizzes')
                     $scope.flipper.setFront(frontSurface);
                     $scope.flipper.setBack(backSurface);
                 
-                var toggle = false;
+                    var toggle = false;
                     frontSurface.on('click', function () {
                         var angle = toggle ? 0 : Math.PI;
                         $scope.flipper.setAngle(angle, {
                             curve: 'easeOutBounce',
-                            duration: 500
+                            duration: 800
                         });
-                        toggle = !toggle;
+                       toggle = !toggle;
                     });
                     backSurface.on('click', function () {
                         var angle = toggle ? 0 : Math.PI;
                         $scope.flipper.setAngle(angle, {
-                            curve: 'easeInOut',
-                            duration: 500
+                            curve: 'easeOutBounce',
+                            duration: 800
                         });
+                            
                         toggle = !toggle;
                     });
-                
+                    
                     var spring = {
                        method: 'spring',
                        period: 1000,
@@ -137,6 +134,7 @@ angular.module('sweetQuizzes')
                       Transform.translate(0,200,0),spring
                     );
                     mainContext.add($scope.centerModifier).add($scope.flipper);
+                    
                 }
                 else{
                     alert("all done!")

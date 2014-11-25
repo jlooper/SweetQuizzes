@@ -1,43 +1,32 @@
 <fa-app class="full-screen" id="app">
 
 
-  <fa-header-footer-layout fa-options="{headerSize: 75, footerSize: 75}">
+ <fa-header-footer-layout fa-options="{headerSize: 75, footerSize: 75}">
 
-    <!-- header -->
-      <fa-surface><p class="title">Sweet Quizzes</p></fa-surface>
+    
+     <fa-surface fa-background-color="'#FBC5C5'"><p class="title">Sweet Quizzes</p></fa-surface>
   
-    <!-- content -->
+    
       <fa-surface fa-background-color="'#9ECEBE'">
           <div class="getnew">
+              
               <form>
                  <input type="text" name="quizId" placeholder="Quiz Id" ng-model="quiz.quizId">
                 <button class="blue" ng-click="getNewQuiz(quiz)">Get Quiz</button>
                 <button class="pink" ng-click="getReviewQuiz()"><img src="img/star.svg" class="star-icon"/>Review</button>              
               </form>
-                
+               
            </div>
           
-           <div align="center">
-          {{quizTitle}}
-          </div>
+               <div align="center">
+                  {{quizTitle}}
+              </div>
+          
+            <img style="float:left" src="img/happy.svg" ng-click="nextQuestion()"/>
+            <img style="float:right" src="img/star.svg" ng-click="storeQuestion()"/> 
+                    
       </fa-surface>
-  
-    <!-- footer -->
-   <fa-grid-layout fa-options="gridLayoutOptions">
-        <fa-modifier>
-           <fa-surface fa-background-color="'#FBC5C5'">
-               <img class="centered" src="img/happy.svg" ng-click="nextQuestion()"/>
-           </fa-surface>
-      </fa-modifier>
-       <fa-modifier>
-            <fa-surface fa-background-color="'#DAF4F1'" ng-click="storeQuestion()">
-                <img class="centered" src="img/star.svg"/>
-           </fa-surface>
-      </fa-modifier>
-       
-	</fa-grid-layout>
-      
-
+    
   </fa-header-footer-layout>
 
 </fa-app>

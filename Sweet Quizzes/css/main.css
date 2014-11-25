@@ -1,15 +1,18 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: mark@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+
+
 body {
     margin: 0;
     font-family: 'Lato', sans-serif;
     font-size:1.5em;
-}
-
-.full-screen {
-    position: fixed;
-    bottom: 0;
-    top: 0;
-    left: 0;
-    right: 0;
     background-color: #BDA193;
 }
 .title{
