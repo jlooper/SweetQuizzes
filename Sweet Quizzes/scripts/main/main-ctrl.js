@@ -22,10 +22,6 @@ angular.module('sweetQuizzes')
 
         var mainContext = Engine.createContext();
         
-        $scope.gridLayoutOptions = {
-            dimensions: [2, 1]
-        };
-        
         $scope.getNewQuiz = function (quiz) {
             if(angular.isDefined(quiz)){
                $scope.quizId = quiz.quizId;
